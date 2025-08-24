@@ -16,7 +16,21 @@
   #results { margin-top:15px; font-size:1.2em; white-space:pre; }
   input[type="text"] { width:30ch; }
   button { margin-left:2px; }
-  .column-label { font-size:0.9em; margin-bottom:2px; font-weight:bold; }
+  .column-label { 
+    font-size:0.9em; 
+    margin: 0 0 2px 0;
+    font-weight:bold;
+    display: flex;
+    gap: 6px;
+  }
+  .column-label-left {
+    width: 3.5em;
+    text-align: right;
+    padding-right: 6px;
+  }
+  .column-label-right {
+    width: 30ch;
+  }
 </style>
 </head>
 <body>
@@ -29,6 +43,7 @@
     <button onclick="exportSettings()">設定をエクスポート</button>
     <input type="file" id="importFile" style="display:none" onchange="importSettings(event)">
     <button onclick="document.getElementById('importFile').click()">設定をインポート</button>
+    <button onclick="resetSettings()">設定をリセット</button>
   </div>
 
   <div id="groups"></div>
@@ -90,7 +105,12 @@ function renderGroups(){
 
     // ラベル行
     const labelLine=document.createElement("div"); labelLine.className="column-label";
-    labelLine.textContent="選ばれやすさ  単語の抽選リスト";
+    const leftLabel=document.createElement("span"); leftLabel.className="column-label-left";
+    leftLabel.textContent="選ばれやすさ";
+    const rightLabel=document.createElement("span"); rightLabel.className="column-label-right";
+    rightLabel.textContent="単語の抽選リスト";
+    labelLine.appendChild(leftLabel);
+    labelLine.appendChild(rightLabel);
     details.appendChild(labelLine);
 
     g.words.forEach((w,j)=>{
@@ -117,6 +137,14 @@ function deleteGroup(i){ groups.splice(i,1); saveSettings(); renderGroups(); }
 function moveGroup(i,dir){ const ni=i+dir; if(ni<0||ni>=groups.length) return; const tmp=groups[i]; groups[i]=groups[ni]; groups[ni]=tmp; saveSettings(); renderGroups(); }
 function deleteWord(i,j){ groups[i].words.splice(j,1); saveSettings(); renderGroups(); }
 function toggleSubgroup(i,checked){ groups[i].isSubgroup=checked; saveSettings(); renderGroups(); }
+
+// 設定リセット
+function resetSettings(){
+  if(!confirm("本当に設定をリセットしますか？")) return;
+  groups = [ {name:"グループ1", words:[{text:"", weight:1}], enabled:true, min:0, max:1, isSubgroup:false, triggers:"", search:true, collapsed:false} ];
+  saveSettings();
+  renderGroups();
+}
 
 function weightedRandom(words){
   const pool=[];
