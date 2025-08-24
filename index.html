@@ -7,30 +7,23 @@
   body { font-family: sans-serif; padding: 20px; display: flex; justify-content: center; background:#f9f9f9;}
   #main { width: 600px; }
   .group { border:1px solid #ccc; padding:10px; margin-bottom:20px; border-radius:6px; background:#fff; }
-  .word-line { display:flex; align-items:center; margin-bottom:4px; }
-  .word-line input { margin-right:6px; }
   .header { display:flex; align-items:center; margin-bottom:6px; gap:4px; }
+  .details { margin-left:10px; }
+  .columns { display:flex; gap:6px; }
+  .left, .right { display:flex; flex-direction:column; gap:4px; }
+  .column-label { font-weight:bold; font-size:0.9em; margin-bottom:2px; }
+  .column-label-left, .word-line-left { width:8em; text-align:left; padding-right:6px; }
+  .column-label-right, .word-line-right { width:30ch; }
+  .word-line { display:flex; align-items:center; gap:4px; }
+  .word-line input[type="number"] { width:4em; }
+  .word-line button { width:50px; }
+  .bottom { margin-top:6px; }
   .result-line { display:flex; padding-left:0.25em; }
   .result-name { width:12em; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font-weight:bold; }
   .result-word { margin-left:0.5em; }
   #results { margin-top:15px; font-size:1.2em; white-space:pre; }
   input[type="text"] { width:30ch; }
   button { margin-left:2px; }
-  .column-label { 
-    font-size:0.9em; 
-    margin: 0 0 2px 0;
-    font-weight:bold;
-    display: flex;
-    gap: 6px;
-  }
-  .column-label-left {
-    width: 3.5em;
-    text-align: right;
-    padding-right: 6px;
-  }
-  .column-label-right {
-    width: 30ch;
-  }
 </style>
 </head>
 <body>
@@ -54,15 +47,21 @@
 let groups = [];
 
 function saveSettings(){
-  const key = location.pathname;
-  localStorage.setItem("wordGroups_"+key, JSON.stringify(groups));
+  localStorage.setItem("wordGroups_"+location.pathname, JSON.stringify(groups));
 }
 
 function loadSettings(){
-  const key = location.pathname;
-  const data = localStorage.getItem("wordGroups_"+key);
+  const data = localStorage.getItem("wordGroups_"+location.pathname);
   if(data) groups = JSON.parse(data);
-  else groups = [ {name:"グループ1", words:[{text:"", weight:1}], enabled:true, min:0, max:1, isSubgroup:false, triggers:"", search:true, collapsed:false} ];
+  else groups = [{name:"グループ1", words:[{text:"", weight:1}], enabled:true, min:0, max:1, isSubgroup:false, triggers:"", search:true, collapsed:false}];
+}
+
+function resetSettings(){
+  if(confirm("本当にリセットしますか？")){
+    groups=[{name:"グループ1", words:[{text:"", weight:1}], enabled:true, min:0, max:1, isSubgroup:false, triggers:"", search:true, collapsed:false}];
+    saveSettings();
+    renderGroups();
+  }
 }
 
 function renderGroups(){
@@ -71,6 +70,7 @@ function renderGroups(){
   groups.forEach((g,i)=>{
     const div=document.createElement("div"); div.className="group";
 
+    // header
     const row1=document.createElement("div"); row1.className="header";
     row1.innerHTML = `
       <button onclick="toggleCollapse(${i})">${g.collapsed?"▶":"▼"}</button>
@@ -83,13 +83,13 @@ function renderGroups(){
     `;
     div.appendChild(row1);
 
-    const details=document.createElement("div");
+    // details
+    const details=document.createElement("div"); details.className="details";
     details.style.display = g.collapsed?"none":"block";
 
     // 抽選数
     const row2=document.createElement("div");
-    row2.innerHTML = `抽選数: <input type="number" min="0" value="${g.min||0}" style="width:4em" onchange="groups[${i}].min=parseInt(this.value)||0; saveSettings();">
-                      ~ <input type="number" min="0" value="${g.max||0}" style="width:4em" onchange="groups[${i}].max=parseInt(this.value)||0; saveSettings();">`;
+    row2.innerHTML = `抽選数: <input type="number" min="0" value="${g.min||0}" onchange="groups[${i}].min=parseInt(this.value)||0; saveSettings();"> ~ <input type="number" min="0" value="${g.max||0}" onchange="groups[${i}].max=parseInt(this.value)||0; saveSettings();">`;
     details.appendChild(row2);
 
     // サブグループ
@@ -99,32 +99,43 @@ function renderGroups(){
 
     if(g.isSubgroup){
       const trigger=document.createElement("div");
-      trigger.innerHTML=`<input type="text" placeholder="トリガー式" value="${g.triggers||""}" onchange="groups[${i}].triggers=this.value; saveSettings();" style="width:90%">`;
+      trigger.innerHTML=`<input type="text" placeholder="トリガー式　　　&,()が使用可能" value="${g.triggers||""}" onchange="groups[${i}].triggers=this.value; saveSettings();" style="width:90%">`;
       details.appendChild(trigger);
     }
 
-    // ラベル行
-    const labelLine=document.createElement("div"); labelLine.className="column-label";
-    const leftLabel=document.createElement("span"); leftLabel.className="column-label-left";
-    leftLabel.textContent="選ばれやすさ";
-    const rightLabel=document.createElement("span"); rightLabel.className="column-label-right";
-    rightLabel.textContent="単語の抽選リスト";
-    labelLine.appendChild(leftLabel);
-    labelLine.appendChild(rightLabel);
-    details.appendChild(labelLine);
+    // columns
+    const columns = document.createElement("div"); columns.className="columns";
+    const leftCol = document.createElement("div"); leftCol.className="left";
+    const leftLabel=document.createElement("div"); leftLabel.className="column-label-left column-label"; leftLabel.textContent="選ばれやすさ";
+    leftCol.appendChild(leftLabel);
+    const rightCol = document.createElement("div"); rightCol.className="right";
+    const rightLabel=document.createElement("div"); rightLabel.className="column-label-right column-label"; rightLabel.textContent="抽選される単語リスト";
+    rightCol.appendChild(rightLabel);
 
     g.words.forEach((w,j)=>{
-      const line=document.createElement("div"); line.className="word-line";
-      const weightInput=`<input type="number" min="1" value="${w.weight}" onchange="groups[${i}].words[${j}].weight=parseInt(this.value)||1; saveSettings();">`;
-      const textInput=`<input type="text" value="${w.text}" onchange="groups[${i}].words[${j}].text=this.value; saveSettings();">`;
-      let delBtn="";
-      if(j>0) delBtn=`<button onclick="deleteWord(${i},${j})">削除</button>`;
-      line.innerHTML=weightInput+textInput+delBtn;
-      details.appendChild(line);
+      const leftLine=document.createElement("div"); leftLine.className="word-line-left word-line";
+      const leftInput=document.createElement("input"); leftInput.type="number"; leftInput.min=1; leftInput.value=w.weight;
+      leftInput.onchange = ()=>{ groups[i].words[j].weight=parseInt(leftInput.value)||1; saveSettings(); };
+      leftLine.appendChild(leftInput);
+      leftCol.appendChild(leftLine);
+
+      const rightLine=document.createElement("div"); rightLine.className="word-line-right word-line";
+      const rightInput=document.createElement("input"); rightInput.type="text"; rightInput.value=w.text;
+      rightInput.onchange = ()=>{ groups[i].words[j].text=rightInput.value; saveSettings(); };
+      rightLine.appendChild(rightInput);
+      if(j>0){ const delBtn=document.createElement("button"); delBtn.textContent="削除"; delBtn.onclick=()=>{ deleteWord(i,j); }; rightLine.appendChild(delBtn); }
+      rightCol.appendChild(rightLine);
     });
 
-    const addBtn=document.createElement("button"); addBtn.textContent="単語を追加"; addBtn.onclick=()=>{groups[i].words.push({text:"", weight:1}); saveSettings(); renderGroups();};
-    details.appendChild(addBtn);
+    columns.appendChild(leftCol);
+    columns.appendChild(rightCol);
+    details.appendChild(columns);
+
+    // add button
+    const addDiv=document.createElement("div"); addDiv.className="bottom";
+    const addBtn=document.createElement("button"); addBtn.textContent="単語を追加"; addBtn.onclick=()=>{ groups[i].words.push({text:"", weight:1}); saveSettings(); renderGroups(); };
+    addDiv.appendChild(addBtn);
+    details.appendChild(addDiv);
 
     div.appendChild(details);
     container.appendChild(div);
@@ -138,14 +149,6 @@ function moveGroup(i,dir){ const ni=i+dir; if(ni<0||ni>=groups.length) return; c
 function deleteWord(i,j){ groups[i].words.splice(j,1); saveSettings(); renderGroups(); }
 function toggleSubgroup(i,checked){ groups[i].isSubgroup=checked; saveSettings(); renderGroups(); }
 
-// 設定リセット
-function resetSettings(){
-  if(!confirm("本当に設定をリセットしますか？")) return;
-  groups = [ {name:"グループ1", words:[{text:"", weight:1}], enabled:true, min:0, max:1, isSubgroup:false, triggers:"", search:true, collapsed:false} ];
-  saveSettings();
-  renderGroups();
-}
-
 function weightedRandom(words){
   const pool=[];
   words.forEach(w=>{for(let k=0;k<w.weight;k++) pool.push(w.text);});
@@ -153,7 +156,6 @@ function weightedRandom(words){
   return pool[Math.floor(Math.random()*pool.length)];
 }
 
-// chooseCount 4乗版
 function chooseCount(min,max){
   if(min>max) [min,max]=[max,min];
   if(max===0) return 0;
@@ -174,7 +176,6 @@ function chooseCount(min,max){
   return values[values.length-1];
 }
 
-// サブグループ用トリガー式パーサー
 function parseExpr(str){
   let i=0;
   function skip(){ while(str[i]===" ") i++; }
@@ -197,12 +198,10 @@ function evalExpr(node,words){
   if(node.type==="OR") return node.children.some(c=>evalExpr(c,words));
 }
 
-// 抽選
 function draw(){
   const resultsDiv=document.getElementById("results"); resultsDiv.innerHTML="";
   const normalGroups = groups.filter(g=>g.enabled && !g.isSubgroup);
   const subGroups = groups.filter(g=>g.enabled && g.isSubgroup);
-
   const finalResults = [];
   const chosenWords = [];
   const processed = new Set();
@@ -262,12 +261,10 @@ function draw(){
   });
 }
 
-// Google検索
 function searchGoogle(){
   const resultsDiv=document.getElementById("results");
   const words=[];
   let currentGroup = null;
-  
   resultsDiv.querySelectorAll(".result-line").forEach(line=>{
     const word = line.querySelector(".result-word").textContent;
     const groupName = line.querySelector(".result-name").textContent;
@@ -275,13 +272,11 @@ function searchGoogle(){
     if(!word || !currentGroup || !currentGroup.search) return;
     words.push(word);
   });
-  
   if(words.length===0) return;
   const query = encodeURIComponent(words.join(" "));
   window.open(`https://www.google.com/search?q=${query}`,"_blank");
 }
 
-// 設定のエクスポート/インポート
 function exportSettings(){
   const blob = new Blob([JSON.stringify(groups,null,2)], {type:"application/json"});
   const url = URL.createObjectURL(blob);
