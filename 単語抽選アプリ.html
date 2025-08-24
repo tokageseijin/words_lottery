@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>単語抽選アプリ</title>
+<style>
+  body { 
+    font-family: sans-serif; 
+    padding: 20px; 
+    display: flex; 
+    justify-content: center; /* 中央寄せ */
+    background: #f9f9f9;
+  }
+  #main {
+    width: 600px; /* 全体幅固定 */
+  }
+  .group { 
+    border: 1px solid #ccc; 
+    padding: 10px; 
+    margin-bottom: 15px; /* グループ間のパディング増加 */
+    border-radius: 6px; 
+    background: #fff;
+  }
+  .word-line { 
+    display: flex; 
+    align-items: center; 
+    margin-bottom: 4px; 
+  }
+  .word-line input { 
+    margin-right: 6px; 
+    width: 12em; 
+  }
+  .result-line { display: flex; padding-left: 0.25em; } /* 軽いパディング */
+  .result-name { width: 12em; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: bold; }
+  .result-word { margin-left: 0.5em; }
+  #results { margin-top: 15px; font-size: 1.2em; white-space: pre; }
+  input[type="text"] { width: 30ch; }
+  button { margin-left: 2px; }
+</style>
+</head>
+<body>
+<div id="main">
+  <button onclick="draw()">抽選</button>
+  <div id="results"></div>
+
+  <div style="margin:10px 0;">
+    <button onclick="exportSettings()">設定をエクスポート</button>
+    <input type="file" id="importFile" style="display:none" onchange="importSettings(event)">
+    <button onclick="document.getElementById('importFile').click()">設定をインポート</button>
+  </div>
+
+  <div id="groups"></div>
+  <button onclick="addGroup()">グループを追加</button>
+</div>
+
+<script>
+let groups = [];
+
+function saveSettings(){
+  const key = location.pathname;
+  localStorage.setItem("wordGroups_"+key, JSON.stringify(groups));
+}
+
+function loadSettings(){
+  const key = location.pathname;
+  const data = localStorage.getItem("wordGroups_"+key);
+  if(data) groups = JSON.parse(data);
+  else groups = [ {name:"グループ1", words:[{text:"", weight:1}], enabled:true, min:1, max:1, isSubgroup:false, triggers:"", collapsed:false} ];
+}
+
+function renderGroups(){
+  const container = document.getElementById("groups");
+  container.innerHTML="";
+  groups.forEach((g,i)=>{
+    const div=document.createElement("div"); 
+    div.className="group";
+
+    // 1段目: 折りたたみ + グループ名 + 有効チェック + 移動 + 削除
+    const row1=document.createElement("div");
+    row1.innerHTML = `
+      <button onclick="toggleCollapse(${i})">${g.collapsed ? "▶" : "▼"}</button>
+      <input type="text" value="${g.name}" onchange="groups[${i}].name=this.value; saveSettings();">
+      <label><input type="checkbox" ${g.enabled?"checked":""} onchange="groups[${i}].enabled=this.checked; saveSettings();"> 有効</label>
+      <button onclick="moveGroup(${i},-1)">↑</button>
+      <button onclick="moveGroup(${i},1)">↓</button>
+      <button onclick="deleteGroup(${i})">削除</button>
+    `;
+    div.appendChild(row1);
+
+    // 折りたたみ部分
+    const details=document.createElement("div");
+    details.style.display = g.collapsed ? "none" : "block";
+
+    const row2=document.createElement("div");
+    row2.innerHTML = `
+      抽選数: <input type="number" min="0" value="${g.min||0}" style="width:4em" onchange="groups[${i}].min=parseInt(this.value)||0; saveSettings();">
+      ~ <input type="number" min="0" value="${g.max||0}" style="width:4em" onchange="groups[${i}].max=parseInt(this.value)||0; saveSettings();">`;
+    details.appendChild(row2);
+
+    const row3=document.createElement("div");
+    row3.innerHTML = `<label><input type="checkbox" ${g.isSubgroup?"checked":""} onchange="toggleSubgroup(${i},this.checked)"> サブグループ</label>`;
+    details.appendChild(row3);
+
+    if(g.isSubgroup){
+      const trigger=document.createElement("div");
+      trigger.innerHTML=`<input type="text" placeholder="トリガー式" value="${g.triggers||""}" onchange="groups[${i}].triggers=this.value; saveSettings();" style="width:90%">`;
+      details.appendChild(trigger);
+    }
+
+    g.words.forEach((w,j)=>{
+      const line=document.createElement("div"); line.className="word-line";
+      const weightInput=`<input type="number" min="1" value="${w.weight}" onchange="groups[${i}].words[${j}].weight=parseInt(this.value)||1; saveSettings();">`;
+      const textInput=`<input type="text" value="${w.text}" onchange="groups[${i}].words[${j}].text=this.value; saveSettings();">`;
+      let delBtn="";
+      if(j>0) delBtn=`<button onclick="deleteWord(${i},${j})">削除</button>`;
+      line.innerHTML=weightInput+textInput+delBtn;
+      details.appendChild(line);
+    });
+    const addBtn=document.createElement("button"); 
+    addBtn.textContent="単語を追加"; 
+    addBtn.onclick=()=>{groups[i].words.push({text:"", weight:1}); saveSettings(); renderGroups();};
+    details.appendChild(addBtn);
+
+    div.appendChild(details);
+    container.appendChild(div);
+  });
+}
+
+function toggleCollapse(i){ groups[i].collapsed = !groups[i].collapsed; saveSettings(); renderGroups(); }
+function addGroup(){ groups.push({name:"新規グループ", words:[{text:"", weight:1}], enabled:true, min:0, max:1, isSubgroup:false, triggers:"", collapsed:false}); saveSettings(); renderGroups(); }
+function deleteGroup(i){ groups.splice(i,1); saveSettings(); renderGroups(); }
+function moveGroup(i,dir){ const ni=i+dir; if(ni<0||ni>=groups.length) return; const tmp=groups[i]; groups[i]=groups[ni]; groups[ni]=tmp; saveSettings(); renderGroups(); }
+function deleteWord(i,j){ groups[i].words.splice(j,1); saveSettings(); renderGroups(); }
+function toggleSubgroup(i,checked){ groups[i].isSubgroup=checked; saveSettings(); renderGroups(); }
+
+function weightedRandom(words){
+  const pool=[];
+  words.forEach(w=>{for(let k=0;k<w.weight;k++) pool.push(w.text);});
+  if(pool.length===0) return null;
+  return pool[Math.floor(Math.random()*pool.length)];
+}
+
+// chooseCount 4乗版
+function chooseCount(min,max){
+  if(min>max) [min,max]=[max,min];
+  if(max===0) return 0;
+  const values=[];
+  const weights=[];
+  const S = (max*(max+1))/2 - ((min-1>=0)?((min-1)*min)/2:0);
+  for(let n=min;n<=max;n++){
+    const w = Math.pow(S-n,4);
+    values.push(n);
+    weights.push(w);
+  }
+  const total = weights.reduce((a,b)=>a+b,0);
+  if(total===0) return min;
+  let r=Math.random()*total;
+  for(let i=0;i<values.length;i++){
+    if(r<weights[i]) return values[i];
+    r-=weights[i];
+  }
+  return values[values.length-1];
+}
+
+function parseExpr(str){
+  let i=0;
+  function skip(){ while(str[i]===" ") i++; }
+  function parseFactor(){
+    skip();
+    if(str[i]==="("){ i++; const node=parseOr(); skip(); if(str[i]!==")") throw new Error(") expected"); i++; return node; }
+    let word="";
+    while(i<str.length && ![",","&",")"].includes(str[i])){ word+=str[i++]; }
+    return {type:"WORD", value:word.trim()};
+  }
+  function parseAnd(){
+    let nodes=[parseFactor()];
+    while(true){ skip(); if(str[i]==="&"){ i++; nodes.push(parseFactor()); } else break; }
+    if(nodes.length===1) return nodes[0];
+    return {type:"AND", children:nodes};
+  }
+  function parseOr(){
+    let nodes=[parseAnd()];
+    while(true){ skip(); if(str[i]===","){ i++; nodes.push(parseAnd()); } else break; }
+    if(nodes.length===1) return nodes[0];
+    return {type:"OR", children:nodes};
+  }
+  return parseOr();
+}
+
+function evalExpr(node,words){
+  if(!node) return false;
+  if(node.type==="WORD") return words.includes(node.value);
+  if(node.type==="AND") return node.children.every(c=>evalExpr(c,words));
+  if(node.type==="OR") return node.children.some(c=>evalExpr(c,words));
+}
+
+function draw(){
+  const resultsDiv=document.getElementById("results"); 
+  resultsDiv.innerHTML="";
+  const normalGroups = groups.filter(g=>g.enabled && !g.isSubgroup);
+  const subGroups = groups.filter(g=>g.enabled && g.isSubgroup);
+
+  const finalResults = [];
+  const chosenWords = [];
+  const processed = new Set();
+
+  function processGroup(name,word){
+    finalResults.push({name,word});
+    chosenWords.push(word);
+    let changed=true;
+    while(changed){
+      changed=false;
+      subGroups.forEach(sg=>{
+        if(processed.has(sg)) return;
+        if(!sg.triggers) return;
+        try{
+          const ast=parseExpr(sg.triggers);
+          if(evalExpr(ast,chosenWords)){
+            const count=chooseCount(sg.min||0, sg.max||0);
+            const pool=[...sg.words];
+            for(let k=0;k<count && pool.length>0;k++){
+              const result=weightedRandom(pool);
+              if(result){
+                finalResults.push({name:sg.name, word:result});
+                chosenWords.push(result);
+                pool.splice(pool.findIndex(w=>w.text===result),1);
+              }
+            }
+            processed.add(sg);
+            changed=true;
+          }
+        }catch(e){ console.error("Trigger parse error",e); }
+      });
+    }
+  }
+
+  normalGroups.forEach(g=>{
+    const count=chooseCount(g.min||0, g.max||0);
+    const pool=[...g.words];
+    for(let k=0;k<count && pool.length>0;k++){
+      const result=weightedRandom(pool);
+      if(result){
+        processGroup(g.name,result);
+        pool.splice(pool.findIndex(w=>w.text===result),1);
+      }
+    }
+  });
+
+  let lastGroup = null;
+  finalResults.forEach(r=>{
+    const line=document.createElement("div"); 
+    line.className="result-line";
+    line.style.paddingLeft = "0.25em"; // 微パディング
+    const nameSpan=document.createElement("div"); 
+    nameSpan.className="result-name"; 
+    nameSpan.textContent = (r.name !== lastGroup) ? r.name : ""; // 同じグループは空欄
+    lastGroup = r.name;
+    line.appendChild(nameSpan);
+    const wordSpan=document.createElement("div"); 
+    wordSpan.className="result-word"; 
+    wordSpan.textContent=r.word; 
+    line.appendChild(wordSpan);
+    resultsDiv.appendChild(line);
+  });
+}
+
+function exportSettings(){
+  const blob = new Blob([JSON.stringify(groups, null, 2)], {type:"application/json"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "settings.json";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function importSettings(event){
+  const file = event.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = e=>{
+    try{
+      groups = JSON.parse(e.target.result);
+      saveSettings();
+      renderGroups();
+    }catch(err){
+      alert("インポートに失敗しました: "+err.message);
+    }
+  };
+  reader.readAsText(file);
+}
+
+loadSettings();
+renderGroups();
+</script>
+</body>
+</html>
