@@ -13,10 +13,27 @@
   .left, .right { display:flex; flex-direction:column; gap:4px; }
   .column-label { font-weight:bold; font-size:0.9em; margin-bottom:2px; }
   .column-label-left, .word-line-left { width:8em; text-align:left; padding-right:6px; }
-  .column-label-right, .word-line-right { width:30ch; }
+  .column-label-right, .word-line-right { 
+    width: calc(30ch - 50px - 4px); /* 削除ボタン分(50px)とgap(4px)を差し引く */
+  }
+  .word-line-right:has(button) {
+    width: 30ch; /* 削除ボタンがない場合の幅 */
+  }
   .word-line { display:flex; align-items:center; gap:4px; }
-  .word-line input[type="number"] { width:4em; }
-  .word-line button { width:50px; }
+  .word-line input[type="number"] { 
+    width:4em;
+    height: 28px;
+    box-sizing: border-box;
+  }
+  .word-line input[type="text"] {
+    height: 28px;
+    box-sizing: border-box;
+  }
+  .word-line button { 
+    width:50px;
+    height: 28px;
+    padding: 0;
+  }
   .bottom { margin-top:6px; }
   .result-line { display:flex; padding-left:0.25em; }
   .result-name { width:12em; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font-weight:bold; }
