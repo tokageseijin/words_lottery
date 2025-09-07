@@ -50,6 +50,7 @@
   <div id="results"></div>
 
   <div style="margin:10px 0;">
+    <input type="text" id="settingsName" placeholder="設定名を入力" style="width:30ch; margin-bottom:5px;">
     <button onclick="exportSettings()">設定をエクスポート</button>
     <input type="file" id="importFile" style="display:none" onchange="importSettings(event)">
     <button onclick="document.getElementById('importFile').click()">設定をインポート</button>
@@ -297,7 +298,10 @@ function searchGoogle(){
 function exportSettings(){
   const blob = new Blob([JSON.stringify(groups,null,2)], {type:"application/json"});
   const url = URL.createObjectURL(blob);
-  const a=document.createElement("a"); a.href=url; a.download="settings.json"; a.click();
+  const a=document.createElement("a"); a.href=url; 
+  const settingsName = document.getElementById("settingsName").value.trim();
+  a.download = settingsName ? `${settingsName}.json` : "settings.json";
+  a.click();
   URL.revokeObjectURL(url);
 }
 
