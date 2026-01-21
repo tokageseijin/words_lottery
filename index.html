@@ -63,13 +63,14 @@
 
         .column-label-right,
         .word-line-right {
-            width: calc(30ch - 50px - 4px);
-            /* 削除ボタン分(50px)とgap(4px)を差し引く */
+            /* width: calc(30ch - 50px - 4px); */
+            /* ボタンが増えるので幅固定を解除 */
+            display: flex;
+            align-items: center;
         }
 
         .word-line-right:has(button) {
-            width: 30ch;
-            /* 削除ボタンがない場合の幅 */
+            /* width: 30ch; */
         }
 
         .word-line {
@@ -90,9 +91,10 @@
         }
 
         .word-line button {
-            width: 50px;
+            /* width: 50px; 固定幅を廃止 */
+            min-width: 30px;
+            padding: 0 4px;
             height: 28px;
-            padding: 0;
         }
 
         .bottom {
@@ -230,6 +232,10 @@
                     const rightInput = document.createElement("input"); rightInput.type = "text"; rightInput.value = w.text;
                     rightInput.onchange = () => { groups[i].words[j].text = rightInput.value; saveSettings(); };
                     rightLine.appendChild(rightInput);
+
+                    const upBtn = document.createElement("button"); upBtn.textContent = "↑"; upBtn.onclick = () => moveWord(i, j, -1); rightLine.appendChild(upBtn);
+                    const downBtn = document.createElement("button"); downBtn.textContent = "↓"; downBtn.onclick = () => moveWord(i, j, 1); rightLine.appendChild(downBtn);
+
                     if (j > 0) { const delBtn = document.createElement("button"); delBtn.textContent = "削除"; delBtn.onclick = () => { deleteWord(i, j); }; rightLine.appendChild(delBtn); }
                     rightCol.appendChild(rightLine);
                 });
@@ -254,6 +260,14 @@
         function deleteGroup(i) { groups.splice(i, 1); saveSettings(); renderGroups(); }
         function moveGroup(i, dir) { const ni = i + dir; if (ni < 0 || ni >= groups.length) return; const tmp = groups[i]; groups[i] = groups[ni]; groups[ni] = tmp; saveSettings(); renderGroups(); }
         function deleteWord(i, j) { groups[i].words.splice(j, 1); saveSettings(); renderGroups(); }
+        function moveWord(i, j, dir) {
+            const words = groups[i].words;
+            const newIndex = j + dir;
+            if (newIndex < 0 || newIndex >= words.length) return;
+            [words[j], words[newIndex]] = [words[newIndex], words[j]];
+            saveSettings();
+            renderGroups();
+        }
         function toggleSubgroup(i, checked) { groups[i].isSubgroup = checked; saveSettings(); renderGroups(); }
 
         function weightedRandom(words) {
