@@ -52,6 +52,16 @@
             /* 実行確率もグレー寄りの赤に */
         }
 
+        #drawBtn {
+            font-size: 1.35em;
+            /* 1.5em * 0.9 = 1.35em */
+            padding: 0.2em 1.2em;
+            /* 横幅を2倍相当に保つためパディング調整 */
+            font-weight: bold;
+            margin-right: 10px;
+            cursor: pointer;
+        }
+
         .header {
             display: flex;
             align-items: center;
@@ -186,6 +196,13 @@
             margin-top: 15px;
             font-size: 1.2em;
             white-space: pre;
+            /* グループ風スタイル + 水色背景 */
+            border: 1px solid #bce8f1;
+            padding: 15px;
+            background: #d9edf7;
+            /* 薄い水色 */
+            border-radius: 6px;
+            color: #31708f;
         }
 
         input[type="text"] {
@@ -195,14 +212,24 @@
         button {
             margin-left: 2px;
         }
+
+        .result-prob-footer {
+            font-size: 0.8em;
+            color: #688a9e;
+            /* 水色背景に合う少し濃い色 */
+            text-align: right;
+            margin-top: 10px;
+            border-top: 1px dashed #a5d0dd;
+            padding-top: 5px;
+        }
     </style>
 </head>
 
 <body>
     <div id="main">
-        <button onclick="draw()">抽選</button>
+        <button id="drawBtn" onclick="draw()">抽選</button>
         <button onclick="searchGoogle()">Googleで検索</button>
-        <div id="results"></div>
+        <div id="results">抽選ボタンでくじを引く</div>
 
         <div style="margin:10px 0;">
             <input type="text" id="settingsName" placeholder="設定名を入力" style="width:30ch; margin-bottom:5px;"
@@ -220,6 +247,7 @@
     <script>
         let groups = [];
         let recalculateTimer = null;
+        let globalWordProbs = {};
 
         function saveSettings() {
             const name = document.getElementById("settingsName").value;
@@ -460,6 +488,9 @@
                 if (!changed) break; // Converged
             }
 
+            // Save to global
+            globalWordProbs = currentTotalWordProbs;
+
             // Step 3: Render to UI
             groups.forEach((g, i) => {
                 // グループ実行確率
@@ -518,45 +549,50 @@
         }
         function toggleSubgroup(i, checked) { groups[i].isSubgroup = checked; saveSettings(); renderGroups(); }
 
-        function weightedRandom(words) {
-            const pool = [];
-            words.forEach(w => { for (let k = 0; k < w.weight; k++) pool.push(w.text); });
-            if (pool.length === 0) return null;
-            return pool[Math.floor(Math.random() * pool.length)];
+        function pickWordWithProb(words) {
+            let total = 0;
+            words.forEach(w => total += (parseInt(w.weight) || 1));
+            if (total === 0) return { word: null, prob: 0, index: -1 };
+
+            let r = Math.random() * total;
+            let current = 0;
+            for (let i = 0; i < words.length; i++) {
+                const w = (parseInt(words[i].weight) || 1);
+                if (r < current + w) {
+                    return { word: words[i].text, prob: w / total, index: i };
+                }
+                current += w;
+            }
+            // Fallback
+            const lastIdx = words.length - 1;
+            return { word: words[lastIdx].text, prob: (parseInt(words[lastIdx].weight) || 1) / total, index: lastIdx };
         }
 
-        function chooseCount(min, max) {
+        function pickCountWithProb(min, max) {
             if (min > max) [min, max] = [max, min];
-
             const values = [];
             const weights = [];
-
             for (let n = min; n <= max; n++) {
-                // 0に近いほど重みを大きくするが、極端にならないように 1 / (n + 2) 程度にする
-                // 以前は (S-n)^4 だったので急激すぎた
-                // 例: min=0, max=1 のとき
-                // n=0 -> 1/1 = 1
-                // n=1 -> 1/2 = 0.5
-                // -> 0が出る確率 66%, 1が出る確率 33% くらいになる
                 const w = 1 / (n + 1);
                 values.push(n);
                 weights.push(w);
             }
-
             const total = weights.reduce((a, b) => a + b, 0);
-            if (total === 0) return min;
+            if (total === 0) return { value: min, prob: 1.0 };
 
             let r = Math.random() * total;
+            let acc = 0;
             for (let i = 0; i < values.length; i++) {
-                if (r < weights[i]) return values[i];
-                r -= weights[i];
+                if (r < acc + weights[i]) return { value: values[i], prob: weights[i] / total };
+                acc += weights[i];
             }
-            return values[values.length - 1];
+            return { value: values[values.length - 1], prob: weights[values.length - 1] / total };
         }
 
         function parseExpr(str) {
             // 改行は無視して連結する（影響を与えない）
-            str = str.replace(/[\r\n]+/g, "");
+            // 全角スペースも無視する
+            str = str.replace(/[\r\n\u3000]+/g, "");
             let i = 0;
             function skip() { while (str[i] && /\s/.test(str[i])) i++; }
             function parseFactor() {
@@ -566,10 +602,9 @@
                 while (i < str.length && ![",", "&", ")"].includes(str[i])) {
                     // 改行も単語の一部にならないように除外
                     if (/\s/.test(str[i]) && word.length > 0) {
-                        // 単語後の空白はskipで飛ばされるが、word収集ループ内ではbreak扱い
                         break;
                     } else if (/\s/.test(str[i])) {
-                        i++; // 単語前の空白（skipで飛ばせなかったものがあれば）
+                        i++;
                         continue;
                     }
                     word += str[i++];
@@ -596,6 +631,8 @@
             const chosenWords = [];
             const processed = new Set();
 
+            let currentPathProb = 1.0;
+
             function processGroup(name, word) {
                 finalResults.push({ name, word });
                 chosenWords.push(word);
@@ -604,22 +641,31 @@
                     changed = false;
                     subGroups.forEach(sg => {
                         if (processed.has(sg)) return;
-                        if (!sg.triggers) return;
+                        if (!sg.triggers) return; // Should not happen if filtered, but safe check
+
+                        // トリガー判定確率は 0 or 1 (既定)
                         try {
                             const ast = parseExpr(sg.triggers);
                             if (evalExpr(ast, chosenWords)) {
-                                const count = chooseCount(sg.min || 0, sg.max || 0);
-                                const pool = [...sg.words];
+                                // Group executes: Multiply by P(Count)
+                                const cRes = pickCountWithProb(sg.min || 0, sg.max || 0);
+                                currentPathProb *= cRes.prob;
+                                const count = cRes.value;
+
+                                const pool = [...sg.words]; // Copy
                                 for (let k = 0; k < count && pool.length > 0; k++) {
-                                    const result = weightedRandom(pool);
-                                    if (result) {
-                                        finalResults.push({ name: sg.name, word: result });
-                                        chosenWords.push(result);
-                                        pool.splice(pool.findIndex(w => w.text === result), 1);
+                                    const res = pickWordWithProb(pool);
+                                    if (res.word !== null) {
+                                        currentPathProb *= res.prob;
+                                        finalResults.push({ name: sg.name, word: res.word });
+                                        chosenWords.push(res.word);
+                                        pool.splice(res.index, 1);
                                     }
                                 }
                                 processed.add(sg);
                                 changed = true;
+                            } else {
+                                // Group does not execute. P=1.0 given the trigger failure.
                             }
                         } catch (e) { console.error("Trigger parse error", e); }
                     });
@@ -627,13 +673,17 @@
             }
 
             normalGroups.forEach(g => {
-                const count = chooseCount(g.min || 0, g.max || 0);
+                const cRes = pickCountWithProb(g.min || 0, g.max || 0);
+                currentPathProb *= cRes.prob;
+                const count = cRes.value;
+
                 const pool = [...g.words];
                 for (let k = 0; k < count && pool.length > 0; k++) {
-                    const result = weightedRandom(pool);
-                    if (result) {
-                        processGroup(g.name, result);
-                        pool.splice(pool.findIndex(w => w.text === result), 1);
+                    const res = pickWordWithProb(pool);
+                    if (res.word !== null) {
+                        currentPathProb *= res.prob;
+                        processGroup(g.name, res.word);
+                        pool.splice(res.index, 1);
                     }
                 }
             });
@@ -649,6 +699,20 @@
                 line.appendChild(wordSpan);
                 resultsDiv.appendChild(line);
             });
+
+            if (finalResults.length === 0) {
+                resultsDiv.textContent = "結果なし";
+            } else {
+                // 表示用に整形
+                let probText = "";
+                if (currentPathProb < 0.0001) probText = "<0.01%";
+                else probText = (currentPathProb * 100).toPrecision(3) + "%";
+
+                const footer = document.createElement("div");
+                footer.className = "result-prob-footer";
+                footer.textContent = `この結果が出る確率: 約 ${probText}`;
+                resultsDiv.appendChild(footer);
+            }
         }
 
         function searchGoogle() {
