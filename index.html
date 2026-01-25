@@ -14,7 +14,8 @@
         }
 
         #main {
-            width: 600px;
+            width: 800px;
+            /* 600px -> 800px レイアウト拡張に対応 */
         }
 
         .group {
@@ -23,6 +24,32 @@
             margin-bottom: 20px;
             border-radius: 6px;
             background: #fff;
+            transition: background 0.2s, opacity 0.2s;
+        }
+
+        .group.disabled {
+            background: #f4f4f4;
+            /* 少し薄く */
+            color: #888;
+            /* フォント色を薄く */
+        }
+
+        .group.disabled input[type="checkbox"] {
+            filter: grayscale(0.8) brightness(1.2);
+            /* 彩度を下げ明度を上げる */
+        }
+
+        .group.disabled input[type="text"],
+        .group.disabled input[type="number"],
+        .group.disabled textarea,
+        .group.disabled button {
+            color: #888;
+            /* border-color変更を削除して、デフォルトスタイル(影など)を維持 */
+        }
+
+        .group.disabled .group-exec-prob {
+            color: #b88;
+            /* 実行確率もグレー寄りの赤に */
         }
 
         .header {
@@ -56,8 +83,8 @@
 
         .column-label-left,
         .word-line-left {
-            width: 14em;
-            /* 8em -> 14em 確率表示文を広げる */
+            width: 22em;
+            /* 14em -> 22em 確率表示文をさらに広げる */
             text-align: left;
             padding-right: 6px;
         }
@@ -90,9 +117,36 @@
             margin-left: 6px;
             font-size: 0.9em;
             color: #666;
-            width: 5em;
+            width: auto;
+            /* 幅固定を解除 */
             text-align: right;
             display: inline-block;
+        }
+
+        .prob-total {
+            font-size: 0.85em;
+            color: #888;
+            margin-left: 2px;
+        }
+
+        .group-exec-prob {
+            font-size: 0.9em;
+            color: #d33;
+            margin-left: 10px;
+            font-weight: bold;
+        }
+
+        .trigger-area {
+            width: 90%;
+            height: auto;
+            min-height: 2.4em;
+            /* 2行分くらい確保するか、1行なら1.5em */
+            font-family: inherit;
+            resize: none;
+            overflow-y: hidden;
+            box-sizing: border-box;
+            padding: 4px;
+            vertical-align: middle;
         }
 
         .word-line input[type="text"] {
@@ -165,6 +219,7 @@
 
     <script>
         let groups = [];
+        let recalculateTimer = null;
 
         function saveSettings() {
             const name = document.getElementById("settingsName").value;
@@ -204,18 +259,28 @@
             }
         }
 
+        function triggerRecalculate() {
+            if (recalculateTimer) clearTimeout(recalculateTimer);
+            recalculateTimer = setTimeout(calculateAndRenderProbabilities, 50);
+        }
+
+        function autoResize(textarea) {
+            textarea.style.height = 'auto';
+            textarea.style.height = (textarea.scrollHeight) + 'px';
+        }
+
         function renderGroups() {
             const container = document.getElementById("groups");
             container.innerHTML = "";
             groups.forEach((g, i) => {
-                const div = document.createElement("div"); div.className = "group";
+                const div = document.createElement("div"); div.className = "group" + (g.enabled ? "" : " disabled");
 
                 // header
                 const row1 = document.createElement("div"); row1.className = "header";
                 row1.innerHTML = `
       <button onclick="toggleCollapse(${i})">${g.collapsed ? "▶" : "▼"}</button>
       <input type="text" value="${g.name}" onchange="groups[${i}].name=this.value; saveSettings();">
-      <label><input type="checkbox" ${g.enabled ? "checked" : ""} onchange="groups[${i}].enabled=this.checked; saveSettings();"> 有効</label>
+      <label><input type="checkbox" ${g.enabled ? "checked" : ""} onchange="groups[${i}].enabled=this.checked; saveSettings(); renderGroups(); triggerRecalculate();"> 有効</label>
       <label><input type="checkbox" ${g.search ? "checked" : ""} onchange="groups[${i}].search=this.checked; saveSettings();"> 検索</label>
       <button onclick="moveGroup(${i},-1)">↑</button>
       <button onclick="moveGroup(${i},1)">↓</button>
@@ -229,18 +294,25 @@
 
                 // 抽選数
                 const row2 = document.createElement("div");
-                row2.innerHTML = `抽選数: <input type="number" min="0" value="${g.min || 0}" onchange="groups[${i}].min=parseInt(this.value)||0; saveSettings();"> ~ <input type="number" min="0" value="${g.max || 0}" onchange="groups[${i}].max=parseInt(this.value)||0; saveSettings();">`;
+                row2.innerHTML = `抽選数: <input type="number" min="0" value="${g.min || 0}" onchange="groups[${i}].min=parseInt(this.value)||0; saveSettings(); triggerRecalculate();"> ~ <input type="number" min="0" value="${g.max || 0}" onchange="groups[${i}].max=parseInt(this.value)||0; saveSettings(); triggerRecalculate();">`;
                 details.appendChild(row2);
 
                 // サブグループ
                 const row3 = document.createElement("div");
-                row3.innerHTML = `<label><input type="checkbox" ${g.isSubgroup ? "checked" : ""} onchange="toggleSubgroup(${i},this.checked)"> サブグループ</label>`;
+                row3.innerHTML = `<label><input type="checkbox" ${g.isSubgroup ? "checked" : ""} onchange="toggleSubgroup(${i},this.checked)"> サブグループ</label>
+                <span class="group-exec-prob" id="group-exec-prob-${i}"></span>`;
                 details.appendChild(row3);
 
                 if (g.isSubgroup) {
                     const trigger = document.createElement("div");
-                    trigger.innerHTML = `<input type="text" placeholder="トリガー式　　　&,()が使用可能" value="${g.triggers || ""}" onchange="groups[${i}].triggers=this.value; saveSettings();" style="width:90%">`;
+                    trigger.innerHTML = `<textarea class="trigger-area" placeholder="トリガー式\n(例) 単語A & 単語B, 単語C" rows="1"
+                        oninput="groups[${i}].triggers=this.value; saveSettings(); triggerRecalculate(); autoResize(this);">${g.triggers || ""}</textarea>`;
                     details.appendChild(trigger);
+                    // 初期リサイズ
+                    setTimeout(() => {
+                        const ta = trigger.querySelector("textarea");
+                        if (ta) autoResize(ta);
+                    }, 0);
                 }
 
                 // columns
@@ -258,21 +330,21 @@
                     leftInput.onchange = () => {
                         groups[i].words[j].weight = parseInt(leftInput.value) || 1;
                         saveSettings();
-                        updateGroupProbabilities(i); // 直後に確率更新
+                        triggerRecalculate();
                     };
                     leftLine.appendChild(leftInput);
 
                     const probSpan = document.createElement("span");
                     probSpan.className = "prob-span";
                     probSpan.id = `prob-${i}-${j}`;
-                    probSpan.textContent = "-%";
+                    probSpan.innerHTML = `-%<span class="prob-total"></span>`; // InnerHTML for sub-span
                     leftLine.appendChild(probSpan);
 
                     leftCol.appendChild(leftLine);
 
                     const rightLine = document.createElement("div"); rightLine.className = "word-line-right word-line";
                     const rightInput = document.createElement("input"); rightInput.type = "text"; rightInput.value = w.text;
-                    rightInput.onchange = () => { groups[i].words[j].text = rightInput.value; saveSettings(); };
+                    rightInput.onchange = () => { groups[i].words[j].text = rightInput.value; saveSettings(); triggerRecalculate(); };
                     rightLine.appendChild(rightInput);
 
                     const upBtn = document.createElement("button"); upBtn.textContent = "↑"; upBtn.onclick = () => moveWord(i, j, -1); rightLine.appendChild(upBtn);
@@ -296,26 +368,139 @@
                 container.appendChild(div);
 
                 // 初回描画時に計算
-                setTimeout(() => updateGroupProbabilities(i), 0);
+                triggerRecalculate();
             });
         }
 
-        function updateGroupProbabilities(groupIndex) {
-            const g = groups[groupIndex];
-            if (!g) return;
-            const totalWeight = g.words.reduce((sum, w) => sum + (parseInt(w.weight) || 0), 0);
+        function calculateAndRenderProbabilities() {
+            // 解析的近似計算 (Analytical Approximation)
+            // 1. 各グループごとの単語当選確率 (条件付き) を計算
+            // 2. 固定点反復法でグループ実行確率と単語全体確率を収束させる
 
-            g.words.forEach((w, j) => {
-                const span = document.getElementById(`prob-${groupIndex}-${j}`);
-                if (span) {
+            // Stats containers
+            const groupExecProbs = new Array(groups.length).fill(0); // P(Group executes)
+            const wordInGroupProbs = groups.map(() => []); // P(Word is chosen | Group executes)
+
+            // Step 1: Initialize & Pre-calculate conditional probabilities
+            groups.forEach((g, i) => {
+                const totalWeight = g.words.reduce((sum, w) => sum + (parseInt(w.weight) || 0), 0);
+                const avgCount = ((g.min || 0) + (g.max || 0)) / 2;
+
+                g.words.forEach((w, j) => {
+                    let p = 0;
                     if (totalWeight > 0) {
-                        const prob = ((parseInt(w.weight) || 0) / totalWeight) * 100;
-                        span.textContent = prob.toFixed(1) + "%";
-                    } else {
-                        span.textContent = "-%";
+                        // 近似: (重み/全体) * 抽選回数。ただし100%を超えない。
+                        // 非復元抽出の厳密計算は複雑すぎるため、期待値ベースで近似する
+                        p = Math.min(1.0, ((parseInt(w.weight) || 0) / totalWeight) * avgCount);
                     }
+                    wordInGroupProbs[i].push(p);
+
+                    // 単純なグループ内確率表示 (UI更新)
+                    const span = document.getElementById(`prob-${i}-${j}`);
+                    if (span) {
+                        // 既存のHTML構造を維持しつつ更新
+                        const probPct = totalWeight > 0 ? (((parseInt(w.weight) || 0) / totalWeight) * 100).toFixed(1) : "-";
+                        // 後で全体確率を追加するために一旦セット
+                        span.setAttribute("data-local-prob", probPct);
+                    }
+                });
+
+                if (g.enabled && !g.isSubgroup) {
+                    groupExecProbs[i] = 1.0; // 通常グループは常に実行される(とみなす)
+                } else if (!g.enabled) {
+                    groupExecProbs[i] = 0.0;
                 }
             });
+
+            // Step 2: Fixed Point Iteration
+            // 依存関係（ある単語が選ばれる -> トリガーが引かれる -> サブグループ実行 -> 別の単語が選ばれる）
+            // を解決するため、数回ループさせる
+            let currentTotalWordProbs = {}; // Word Text -> Probability(0.0~1.0)
+
+            for (let iter = 0; iter < 5; iter++) {
+                // 2-a. Calculate Total Word Probabilities based on current Group Exec Probs
+                const tempWordProbs = {};
+
+                groups.forEach((g, i) => {
+                    const execP = groupExecProbs[i];
+                    if (execP <= 0) return;
+
+                    g.words.forEach((w, j) => {
+                        const condP = wordInGroupProbs[i][j];
+                        const actualP = execP * condP;
+                        if (actualP > 0) {
+                            const txt = w.text; // Note: case sensitive exact match
+                            // 和事象 P(A or B) = 1 - (1-P(A))*(1-P(B))
+                            const oldP = tempWordProbs[txt] || 0;
+                            tempWordProbs[txt] = 1 - (1 - oldP) * (1 - actualP);
+                        }
+                    });
+                });
+                currentTotalWordProbs = tempWordProbs;
+
+                // 2-b. Update Subgroup Execution Probabilities based on Triggers
+                let changed = false;
+                groups.forEach((g, i) => {
+                    if (!g.enabled || !g.isSubgroup) return;
+
+                    let execP = 0;
+                    if (g.triggers) {
+                        try {
+                            const ast = parseExpr(g.triggers);
+                            execP = evalProb(ast, currentTotalWordProbs);
+                        } catch (e) { /* ignore parse error in calc */ }
+                    }
+
+                    if (Math.abs(groupExecProbs[i] - execP) > 0.001) {
+                        groupExecProbs[i] = execP;
+                        changed = true;
+                    }
+                });
+
+                if (!changed) break; // Converged
+            }
+
+            // Step 3: Render to UI
+            groups.forEach((g, i) => {
+                // グループ実行確率
+                const execSpan = document.getElementById(`group-exec-prob-${i}`);
+                if (execSpan) {
+                    if (g.enabled) {
+                        const pct = (groupExecProbs[i] * 100).toFixed(1);
+                        execSpan.textContent = `(実行確率: ${pct}%)`;
+                    } else {
+                        const pct = "0.0";
+                        execSpan.textContent = `(実行確率: ${pct}%)`;
+                    }
+                }
+
+                // 単語全体確率
+                g.words.forEach((w, j) => {
+                    const span = document.getElementById(`prob-${i}-${j}`);
+                    if (span) {
+                        const localProb = span.getAttribute("data-local-prob");
+                        const totalProb = currentTotalWordProbs[w.text] || 0;
+                        const totalProbPct = (totalProb * 100).toFixed(1);
+
+                        // グループ確率はこれまで通り。横に全体確率を追加。
+                        span.innerHTML = `${localProb}% <span class="prob-total">(${totalProbPct}%)</span>`;
+                    }
+                });
+            });
+        }
+
+        function evalProb(node, probs) {
+            if (!node) return 0;
+            if (node.type === "WORD") return probs[node.value] || 0;
+            if (node.type === "AND") {
+                // P(A & B) assuming independence = P(A) * P(B)
+                return node.children.reduce((acc, c) => acc * evalProb(c, probs), 1);
+            }
+            if (node.type === "OR") {
+                // P(A | B) assuming independence = 1 - (1-P(A))*(1-P(B))
+                return 1 - node.children.reduce((acc, c) => acc * (1 - evalProb(c, probs)), 1);
+            }
+            return 0;
         }
 
         function toggleCollapse(i) { groups[i].collapsed = !groups[i].collapsed; saveSettings(); renderGroups(); }
@@ -370,13 +555,25 @@
         }
 
         function parseExpr(str) {
+            // 改行は無視して連結する（影響を与えない）
+            str = str.replace(/[\r\n]+/g, "");
             let i = 0;
-            function skip() { while (str[i] === " ") i++; }
+            function skip() { while (str[i] && /\s/.test(str[i])) i++; }
             function parseFactor() {
                 skip();
                 if (str[i] === "(") { i++; const node = parseOr(); skip(); if (str[i] !== ")") throw new Error(") expected"); i++; return node; }
                 let word = "";
-                while (i < str.length && ![",", "&", ")"].includes(str[i])) { word += str[i++]; }
+                while (i < str.length && ![",", "&", ")"].includes(str[i])) {
+                    // 改行も単語の一部にならないように除外
+                    if (/\s/.test(str[i]) && word.length > 0) {
+                        // 単語後の空白はskipで飛ばされるが、word収集ループ内ではbreak扱い
+                        break;
+                    } else if (/\s/.test(str[i])) {
+                        i++; // 単語前の空白（skipで飛ばせなかったものがあれば）
+                        continue;
+                    }
+                    word += str[i++];
+                }
                 return { type: "WORD", value: word.trim() };
             }
             function parseAnd() { let nodes = [parseFactor()]; while (true) { skip(); if (str[i] === "&") { i++; nodes.push(parseFactor()); } else break; } if (nodes.length === 1) return nodes[0]; return { type: "AND", children: nodes }; }
