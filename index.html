@@ -56,7 +56,8 @@
 
         .column-label-left,
         .word-line-left {
-            width: 8em;
+            width: 14em;
+            /* 8em -> 14em 確率表示文を広げる */
             text-align: left;
             padding-right: 6px;
         }
@@ -83,6 +84,15 @@
             width: 4em;
             height: 28px;
             box-sizing: border-box;
+        }
+
+        .prob-span {
+            margin-left: 6px;
+            font-size: 0.9em;
+            color: #666;
+            width: 5em;
+            text-align: right;
+            display: inline-block;
         }
 
         .word-line input[type="text"] {
@@ -245,8 +255,19 @@
                 g.words.forEach((w, j) => {
                     const leftLine = document.createElement("div"); leftLine.className = "word-line-left word-line";
                     const leftInput = document.createElement("input"); leftInput.type = "number"; leftInput.min = 1; leftInput.value = w.weight;
-                    leftInput.onchange = () => { groups[i].words[j].weight = parseInt(leftInput.value) || 1; saveSettings(); };
+                    leftInput.onchange = () => {
+                        groups[i].words[j].weight = parseInt(leftInput.value) || 1;
+                        saveSettings();
+                        updateGroupProbabilities(i); // 直後に確率更新
+                    };
                     leftLine.appendChild(leftInput);
+
+                    const probSpan = document.createElement("span");
+                    probSpan.className = "prob-span";
+                    probSpan.id = `prob-${i}-${j}`;
+                    probSpan.textContent = "-%";
+                    leftLine.appendChild(probSpan);
+
                     leftCol.appendChild(leftLine);
 
                     const rightLine = document.createElement("div"); rightLine.className = "word-line-right word-line";
@@ -273,6 +294,27 @@
 
                 div.appendChild(details);
                 container.appendChild(div);
+
+                // 初回描画時に計算
+                setTimeout(() => updateGroupProbabilities(i), 0);
+            });
+        }
+
+        function updateGroupProbabilities(groupIndex) {
+            const g = groups[groupIndex];
+            if (!g) return;
+            const totalWeight = g.words.reduce((sum, w) => sum + (parseInt(w.weight) || 0), 0);
+
+            g.words.forEach((w, j) => {
+                const span = document.getElementById(`prob-${groupIndex}-${j}`);
+                if (span) {
+                    if (totalWeight > 0) {
+                        const prob = ((parseInt(w.weight) || 0) / totalWeight) * 100;
+                        span.textContent = prob.toFixed(1) + "%";
+                    } else {
+                        span.textContent = "-%";
+                    }
+                }
             });
         }
 
