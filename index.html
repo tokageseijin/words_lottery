@@ -52,6 +52,17 @@
             /* 実行確率もグレー寄りの赤に */
         }
 
+        .group.disabled input[type="range"] {
+            opacity: 0.8;
+            filter: grayscale(0.2);
+            cursor: not-allowed;
+        }
+
+        .group.disabled canvas {
+            opacity: 0.8;
+            filter: grayscale(0.2);
+        }
+
         #drawBtn {
             font-size: 1.35em;
             /* 1.5em * 0.9 = 1.35em */
@@ -139,6 +150,24 @@
             margin-left: 2px;
         }
 
+        .min-max-input {
+            width: 4em;
+        }
+
+        .dist-control {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 4px;
+            font-size: 0.9em;
+            color: #555;
+        }
+
+        .dist-control input[type="range"] {
+            width: 100px;
+            vertical-align: middle;
+        }
+
         .group-exec-prob {
             font-size: 0.9em;
             color: #d33;
@@ -222,32 +251,66 @@
             border-top: 1px dashed #a5d0dd;
             padding-top: 5px;
         }
+
+        /* Logic for Extra Text Input */
+        .word-extra-row {
+            margin-top: 2px;
+            margin-bottom: 4px;
+            padding-left: 4px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        .word-extra-row input {
+            width: 95%;
+            font-size: 0.9em;
+            padding: 2px 4px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            color: #555;
+        }
+
+        .word-spacer-row {
+            /* Input(approx 23px) + margins */
+            height: 31px;
+            width: 100%;
+        }
+
+        .result-extra-text {
+            font-size: 0.85em;
+            color: #666;
+            margin-left: 1.5em;
+            margin-top: 0px;
+            margin-bottom: 2px;
+        }
     </style>
 </head>
 
 <body>
     <div id="main">
-        <button id="drawBtn" onclick="draw()">抽選</button>
-        <button onclick="searchGoogle()">Googleで検索</button>
+        <button id="drawBtn" onclick="draw()" title="設定に基づいて抽選を行います">抽選</button>
+        <button onclick="searchGoogle()" title="抽選結果の単語をGoogleでまとめて検索します">Googleで検索</button>
         <div id="results">抽選ボタンでくじを引く</div>
 
         <div style="margin:10px 0;">
             <input type="text" id="settingsName" placeholder="設定名を入力" style="width:30ch; margin-bottom:5px;"
-                oninput="saveSettings()">
-            <button onclick="exportSettings()">設定をエクスポート</button>
+                oninput="saveSettings()" title="設定の名前を入力します">
+            <button onclick="exportSettings()" title="現在の設定をJSONファイルとしてダウンロードします">設定をエクスポート</button>
             <input type="file" id="importFile" style="display:none" onchange="importSettings(event)">
-            <button onclick="document.getElementById('importFile').click()">設定をインポート</button>
-            <button onclick="resetSettings()">設定をリセット</button>
+            <button onclick="pickAndLoadSettings()" title="JSONファイルを選択して設定を読み込みます">設定をインポート</button>
+            <button onclick="reImportSettings()" title="最後に読み込んだファイルを再度読み込みます（編集中の確認用）">↻ 再インポート</button>
+            <button onclick="resetSettings()" title="すべての設定を初期状態に戻します">設定をリセット</button>
         </div>
 
         <div id="groups"></div>
-        <button onclick="addGroup()">グループを追加</button>
+        <button onclick="addGroup()" title="新しい単語グループを追加します">グループを追加</button>
     </div>
 
     <script>
         let groups = [];
         let recalculateTimer = null;
         let globalWordProbs = {};
+        let currentFileHandle = null; // for File System Access API
 
         function saveSettings() {
             const name = document.getElementById("settingsName").value;
@@ -261,25 +324,51 @@
                 try {
                     const data = JSON.parse(dataStr);
                     if (Array.isArray(data)) {
-                        groups = data;
+                        groups = data.map(g => migrateGroup(g));
                     } else {
-                        groups = data.groups || [];
+                        groups = (data.groups || []).map(g => migrateGroup(g));
                         const nameBox = document.getElementById("settingsName");
                         if (nameBox) nameBox.value = data.name || "";
                     }
                 } catch (e) {
                     console.error("Load settings error:", e);
-                    // Fallback default
-                    groups = [{ name: "グループ1", words: [{ text: "", weight: 1 }], enabled: true, min: 0, max: 1, isSubgroup: false, triggers: "", search: true, collapsed: false }];
+                    groups = [createDefaultGroup()];
                 }
             } else {
-                groups = [{ name: "グループ1", words: [{ text: "", weight: 1 }], enabled: true, min: 0, max: 1, isSubgroup: false, triggers: "", search: true, collapsed: false }];
+                groups = [createDefaultGroup()];
             }
+        }
+
+        function createDefaultGroup() {
+            return {
+                name: "グループ1",
+                words: [{ text: "", weight: 1 }],
+                enabled: true,
+                min: 0,
+                max: 1,
+                isSubgroup: false,
+                triggers: "",
+                search: true,
+                collapsed: false,
+                peak: 0,
+                sigma: 1.0,
+                skew: 0,     // 偏り (-1.0 ~ 1.0)
+                kurtosis: 0  // 鋭さ (-1.0 ~ 1.0)
+            };
+        }
+
+        function migrateGroup(g) {
+            // Add missing properties for distribution
+            if (typeof g.peak === 'undefined') g.peak = g.min || 0;
+            if (typeof g.sigma === 'undefined') g.sigma = 1.0;
+            if (typeof g.skew === 'undefined') g.skew = 0;
+            if (typeof g.kurtosis === 'undefined') g.kurtosis = 0;
+            return g;
         }
 
         function resetSettings() {
             if (confirm("本当にリセットしますか？")) {
-                groups = [{ name: "グループ1", words: [{ text: "", weight: 1 }], enabled: true, min: 0, max: 1, isSubgroup: false, triggers: "", search: true, collapsed: false }];
+                groups = [createDefaultGroup()];
                 const nameBox = document.getElementById("settingsName");
                 if (nameBox) nameBox.value = "";
                 saveSettings();
@@ -297,6 +386,63 @@
             textarea.style.height = (textarea.scrollHeight) + 'px';
         }
 
+        // 一般化分布の重み計算 (Split Generalized Normal Distribution)
+        function getDistributionWeight(n, peak, sigma, skew, kurtosis) {
+            if (sigma <= 0.01) return n === Math.round(peak) ? 1 : 0; // Dirac delta
+
+            // 1. Skewness (偏り) -> 左右のSigmaを変える
+            // skew = -1 (Left skew) ... -0.5 (Left wide) ... 0 ... 0.5 (Right wide) ... 1 (Right skew)
+            // UI: "偏り" -> 正なら右に広がる(Peakより右のSigmaが大きい)、負なら左に広がる
+            // σL = σ * (1 - skew * 0.8)
+            // σR = σ * (1 + skew * 0.8)
+            // skewが極端すぎると片側が0になるので係数0.8で抑える
+            const s = (skew || 0) * 0.8;
+            let sigmaL = sigma * (1 + s); // 左側 (n < peak) の広がり。skew>0 (右偏り) なら左は狭く？
+            let sigmaR = sigma * (1 - s); // 右側 (n > peak) の広がり。skew>0 なら右は狭く？
+
+            // 修正: ユーザー感覚として「右に偏る」=「右の裾が長い」=「右のSigmaが大きい」
+            // skew > 0 -> sigmaR > sigmaL
+            sigmaL = sigma * (1 - s);
+            sigmaR = sigma * (1 + s);
+
+            const currSigma = (n <= peak) ? sigmaL : sigmaR;
+            if (currSigma <= 0.001) return 0; // Guard
+
+            // 2. Kurtosis (鋭さ) -> 形状パラメータ Beta を変える
+            // Beta = 2.0 (Normal)
+            // kurtosis > 0 (鋭い): Beta < 2.0 (Laplace=1.0)
+            // kurtosis < 0 (平坦): Beta > 2.0 (Uniform->Infinity)
+
+            let beta = 2.0;
+            const k = kurtosis || 0;
+            if (k > 0) {
+                // 鋭くする: 2.0 -> 0.5 (k=1.0)
+                // Linear interpolation for simplicity
+                beta = 2.0 - k * 1.5;
+                if (beta < 0.5) beta = 0.5;
+            } else {
+                // 平坦にする: 2.0 -> 8.0 (k=-1.0)
+                beta = 2.0 - k * 6.0;
+            }
+
+            const diff = Math.abs(n - peak);
+
+            // Generalized Normal Distribution PDF-like kernel
+            // exp( - ( |x - mu| / alpha ) ^ beta )
+            // ここでの sigma は標準偏差そのものではないが、スケールとして扱う
+            // Normal: exp( - (x-mu)^2 / (2*sigma^2) ) = exp( - ( |x-mu| / (sigma*sqrt(2)) )^2 )
+            // alpha = sigma * sqrt(2) for beta=2
+
+            // 簡易的に alpha = currSigma * sqrt(2) をベースに調整
+            // ただし beta が大きいとき、sigma の意味が変わってしまうので、
+            // 「sigma が変曲点付近」という直感を維持するなら調整が必要だが、
+            // ここではシンプルに alpha = currSigma * 1.414 とする。
+
+            const alpha = currSigma * 1.414;
+
+            return Math.exp(-Math.pow(diff / alpha, beta));
+        }
+
         function renderGroups() {
             const container = document.getElementById("groups");
             container.innerHTML = "";
@@ -306,13 +452,14 @@
                 // header
                 const row1 = document.createElement("div"); row1.className = "header";
                 row1.innerHTML = `
-      <button onclick="toggleCollapse(${i})">${g.collapsed ? "▶" : "▼"}</button>
-      <input type="text" value="${g.name}" onchange="groups[${i}].name=this.value; saveSettings();">
-      <label><input type="checkbox" ${g.enabled ? "checked" : ""} onchange="groups[${i}].enabled=this.checked; saveSettings(); renderGroups(); triggerRecalculate();"> 有効</label>
-      <label><input type="checkbox" ${g.search ? "checked" : ""} onchange="groups[${i}].search=this.checked; saveSettings();"> 検索</label>
-      <button onclick="moveGroup(${i},-1)">↑</button>
-      <button onclick="moveGroup(${i},1)">↓</button>
-      <button onclick="deleteGroup(${i})">削除</button>
+      <button onclick="toggleCollapse(${i})" title="詳細の表示/非表示を切り替えます">${g.collapsed ? "▶" : "▼"}</button>
+      <input type="text" value="${g.name}" onchange="groups[${i}].name=this.value; saveSettings();" title="グループの名称です">
+      <label title="このグループを抽選の対象にするか設定します"><input type="checkbox" ${g.enabled ? "checked" : ""} onchange="groups[${i}].enabled=this.checked; saveSettings(); renderGroups(); triggerRecalculate();"> 有効</label>
+      <label title="他のグループのトリガーとして使用された場合、結果に表示しません"><input type="checkbox" ${g.isMaterial ? "checked" : ""} onchange="groups[${i}].isMaterial=this.checked; saveSettings();"> 中間素材</label>
+      <label title="Google検索ボタンを押した際、このグループの結果を含めるか設定します"><input type="checkbox" ${g.search ? "checked" : ""} onchange="groups[${i}].search=this.checked; saveSettings();"> 検索</label>
+      <button onclick="moveGroup(${i},-1)" title="グループを上に移動します">↑</button>
+      <button onclick="moveGroup(${i},1)" title="グループを下に移動します">↓</button>
+      <button onclick="deleteGroup(${i})" title="このグループを削除します">削除</button>
     `;
                 div.appendChild(row1);
 
@@ -320,14 +467,103 @@
                 const details = document.createElement("div"); details.className = "details";
                 details.style.display = g.collapsed ? "none" : "block";
 
-                // 抽選数
-                const row2 = document.createElement("div");
-                row2.innerHTML = `抽選数: <input type="number" min="0" value="${g.min || 0}" onchange="groups[${i}].min=parseInt(this.value)||0; saveSettings(); triggerRecalculate();"> ~ <input type="number" min="0" value="${g.max || 0}" onchange="groups[${i}].max=parseInt(this.value)||0; saveSettings(); triggerRecalculate();">`;
-                details.appendChild(row2);
+                // Main Container for controls
+                const controlsContainer = document.createElement("div");
+                controlsContainer.style.display = "flex";
+                controlsContainer.style.flexDirection = "column";
+                controlsContainer.style.marginBottom = "10px";
+                controlsContainer.style.width = "100%"; // Full width
+
+                // --- Top Row: Count Controls + Heatmap ---
+                const topRow = document.createElement("div");
+                topRow.style.display = "flex";
+                topRow.style.flexDirection = "row";
+                topRow.style.alignItems = "center";
+                topRow.style.marginBottom = "8px";
+                topRow.style.width = "100%";
+
+                // 1. Count Controls
+                const countControl = document.createElement("div");
+                countControl.style.marginRight = "15px";
+                countControl.style.whiteSpace = "nowrap";
+                const min = g.min !== undefined ? g.min : 0;
+                const max = g.max !== undefined ? g.max : 1;
+                countControl.innerHTML = `
+                    <span>抽選数:</span>
+                    <input type="number" class="min-max-input" min="0" value="${min}" onchange="updateGroupCount(${i}, 'min', this.value)" style="width:50px;"> 
+                    <span>～</span>
+                    <input type="number" class="min-max-input" min="0" value="${max}" onchange="updateGroupCount(${i}, 'max', this.value)" style="width:50px;">
+                `;
+                topRow.appendChild(countControl);
+
+                // 2. Heatmap Canvas
+                const canvasContainer = document.createElement("div");
+                canvasContainer.style.flexGrow = "1"; // Fill rest
+                canvasContainer.style.display = "flex";
+                canvasContainer.style.alignItems = "center";
+                canvasContainer.style.minWidth = "0"; // Allow shrinking if needed
+
+                const canvas = document.createElement("canvas");
+                canvas.id = `dist-canvas-${i}`;
+                canvas.className = "dist-canvas";
+                // Canvas size
+                canvas.width = 400;
+                canvas.height = 18;
+                canvas.style.width = "100%";
+                canvas.style.height = "18px";
+                canvas.style.background = "#fff";
+                canvas.style.border = "1px solid #eee";
+
+                canvasContainer.appendChild(canvas);
+                topRow.appendChild(canvasContainer);
+
+                controlsContainer.appendChild(topRow);
+
+                // --- Bottom Row: 4 Sliders (Grid Layout) ---
+                const sliderContainer = document.createElement("div");
+                sliderContainer.style.display = "grid";
+                // Prevent overflow using minmax(0, 1fr)
+                sliderContainer.style.gridTemplateColumns = "repeat(4, minmax(0, 1fr))";
+                sliderContainer.style.gap = "8px"; // Slightly tighter gap
+                sliderContainer.style.width = "100%";
+                sliderContainer.style.boxSizing = "border-box";
+
+                const peak = g.peak !== undefined ? g.peak : min;
+                const sigma = g.sigma !== undefined ? g.sigma : 1.0;
+
+                // Horizontal item style
+                const sliderRowStyle = "display:flex; align-items:center; font-size:0.8em; width:100%; box-sizing:border-box; overflow:hidden;";
+                const labelStyle = "white-space:nowrap; margin-right:4px; flex-shrink:0;";
+                const sliderStyle = "flex-grow:1; min-width:0; margin:0 4px; height:1em;"; // min-width:0 allows shrinking
+                const valStyle = "font-family:monospace; min-width:3ch; text-align:right; flex-shrink:0;";
+
+                // Helper to create slider HTML
+                const createSlider = (label, type, minV, maxV, step, val) => `
+                    <div style="${sliderRowStyle}">
+                        <span style="${labelStyle}">${label}</span>
+                        <input type="range" min="${minV}" max="${maxV}" step="${step}" value="${val}" style="${sliderStyle}"
+                            oninput="updateGroupDist(${i}, '${type}', this.value)" title="${label}: ${Number(val).toFixed(2)}">
+                        <span style="${valStyle}">${Number(val).toFixed(2)}</span>
+                    </div>
+                `;
+
+                let slidersHTML = "";
+                slidersHTML += createSlider("ピーク", "peak", min, max, 0.01, peak);
+                slidersHTML += createSlider("ブレ幅", "sigma", 0, 5.0, 0.01, sigma);
+                slidersHTML += createSlider("偏り", "skew", -1.0, 1.0, 0.05, g.skew || 0);
+                slidersHTML += createSlider("鋭さ", "kurtosis", -1.0, 1.0, 0.05, g.kurtosis || 0);
+
+                sliderContainer.innerHTML = slidersHTML;
+                controlsContainer.appendChild(sliderContainer);
+
+                details.appendChild(controlsContainer);
+
+                // Initial Draw
+                setTimeout(() => drawDistCanvas(canvas, min, max, peak, sigma, g.skew || 0, g.kurtosis || 0), 0);
 
                 // サブグループ
                 const row3 = document.createElement("div");
-                row3.innerHTML = `<label><input type="checkbox" ${g.isSubgroup ? "checked" : ""} onchange="toggleSubgroup(${i},this.checked)"> サブグループ</label>
+                row3.innerHTML = `<label><input type="checkbox" ${g.isSubgroup ? "checked" : ""} onchange="toggleSubgroup(${i},this.checked)"> 条件を追加</label>
                 <span class="group-exec-prob" id="group-exec-prob-${i}"></span>`;
                 details.appendChild(row3);
 
@@ -343,52 +579,182 @@
                     }, 0);
                 }
 
-                // columns
+                // columns - REFACTORED to Row-based layout
                 const columns = document.createElement("div"); columns.className = "columns";
-                const leftCol = document.createElement("div"); leftCol.className = "left";
-                const leftLabel = document.createElement("div"); leftLabel.className = "column-label-left column-label"; leftLabel.textContent = "選ばれやすさ";
-                leftCol.appendChild(leftLabel);
-                const rightCol = document.createElement("div"); rightCol.className = "right";
-                const rightLabel = document.createElement("div"); rightLabel.className = "column-label-right column-label"; rightLabel.textContent = "抽選される単語リスト";
-                rightCol.appendChild(rightLabel);
+                columns.style.flexDirection = "column"; // Verify CSS, assuming .columns is flex row by default? Overriding to column likely needed or new class.
+                // Resetting class to standard block for rows
+                columns.className = "word-list-container";
+                columns.style.display = "flex";
+                columns.style.flexDirection = "column";
+                columns.style.gap = "4px";
+
+                // Header
+                const header = document.createElement("div");
+                header.style.display = "flex";
+                header.style.marginBottom = "4px";
+                header.style.fontSize = "0.9em";
+                header.style.color = "#555";
+
+                const leftLabel = document.createElement("div");
+                leftLabel.style.width = "40%"; // Mimic original split balance (approx)
+                leftLabel.style.flexShrink = "0";
+                leftLabel.style.textAlign = "left"; // Request: Left align
+                leftLabel.textContent = "選ばれやすさ"; // Request: Change text
+
+                const rightLabel = document.createElement("div");
+                rightLabel.style.flexGrow = "1";
+                rightLabel.style.paddingLeft = "8px";
+                rightLabel.textContent = "抽選される単語リスト";
+
+                header.appendChild(leftLabel);
+                header.appendChild(rightLabel);
+                columns.appendChild(header);
 
                 g.words.forEach((w, j) => {
-                    const leftLine = document.createElement("div"); leftLine.className = "word-line-left word-line";
-                    const leftInput = document.createElement("input"); leftInput.type = "number"; leftInput.min = 1; leftInput.value = w.weight;
+                    const wordContainer = document.createElement("div");
+                    wordContainer.className = "word-container";
+                    wordContainer.style.display = "flex";
+                    wordContainer.style.flexDirection = "column";
+                    wordContainer.style.borderBottom = "1px solid #f0f0f0";
+                    wordContainer.style.marginBottom = "4px";
+                    wordContainer.style.paddingBottom = "4px";
+
+                    const mainRow = document.createElement("div");
+                    mainRow.style.display = "flex";
+                    mainRow.style.alignItems = "center";
+
+                    // --- Left Side (Weight & Prob) ---
+                    const leftSection = document.createElement("div");
+                    leftSection.className = "word-left-section";
+                    leftSection.style.width = "40%";
+                    leftSection.style.flexShrink = "0";
+                    leftSection.style.marginLeft = "8px"; // Request: Margin Left
+                    leftSection.style.display = "flex";
+                    leftSection.style.alignItems = "center";
+                    leftSection.style.justifyContent = "flex-start"; // Request: Container left align
+                    leftSection.style.gap = "8px";
+
+                    const leftInput = document.createElement("input");
+                    leftInput.type = "number";
+                    leftInput.min = 0;
+                    leftInput.value = w.weight;
+                    leftInput.style.width = "40px"; // Request: 80% of original 50px
+                    leftInput.style.textAlign = "right"; // Request: Text right align
                     leftInput.onchange = () => {
-                        groups[i].words[j].weight = parseInt(leftInput.value) || 1;
+                        groups[i].words[j].weight = parseInt(leftInput.value) || 0;
                         saveSettings();
                         triggerRecalculate();
                     };
-                    leftLine.appendChild(leftInput);
 
                     const probSpan = document.createElement("span");
                     probSpan.className = "prob-span";
                     probSpan.id = `prob-${i}-${j}`;
-                    probSpan.innerHTML = `-%<span class="prob-total"></span>`; // InnerHTML for sub-span
-                    leftLine.appendChild(probSpan);
+                    probSpan.style.fontSize = "0.85em";
+                    probSpan.style.marginLeft = "4px";
+                    probSpan.style.textAlign = "left"; // Request: Text left align (container implied)
+                    probSpan.style.width = "60px"; // Fixed space for prob
+                    probSpan.innerHTML = `-%<span class="prob-total"></span>`;
 
-                    leftCol.appendChild(leftLine);
+                    leftSection.appendChild(leftInput);
+                    leftSection.appendChild(probSpan);
+                    mainRow.appendChild(leftSection);
 
-                    const rightLine = document.createElement("div"); rightLine.className = "word-line-right word-line";
-                    const rightInput = document.createElement("input"); rightInput.type = "text"; rightInput.value = w.text;
+                    // --- Right Side (Text & Controls) ---
+                    const rightSection = document.createElement("div");
+                    rightSection.className = "word-right-section";
+                    rightSection.style.flexGrow = "1";
+                    rightSection.style.display = "flex";
+                    rightSection.style.alignItems = "center";
+                    rightSection.style.paddingLeft = "8px";
+                    rightSection.style.gap = "4px";
+
+                    const rightInput = document.createElement("input");
+                    rightInput.type = "text";
+                    rightInput.value = w.text;
+                    rightInput.style.flexGrow = "1";
+
                     rightInput.onchange = () => { groups[i].words[j].text = rightInput.value; saveSettings(); triggerRecalculate(); };
-                    rightLine.appendChild(rightInput);
 
-                    const upBtn = document.createElement("button"); upBtn.textContent = "↑"; upBtn.onclick = () => moveWord(i, j, -1); rightLine.appendChild(upBtn);
-                    const downBtn = document.createElement("button"); downBtn.textContent = "↓"; downBtn.onclick = () => moveWord(i, j, 1); rightLine.appendChild(downBtn);
+                    const extraCheck = document.createElement("input");
+                    extraCheck.type = "checkbox";
+                    extraCheck.className = "extra-check";
+                    extraCheck.title = "追加テキスト（トリガー条件）を有効にする";
+                    extraCheck.checked = !!w.useExtra;
+                    extraCheck.onchange = () => {
+                        groups[i].words[j].useExtra = extraCheck.checked;
+                        saveSettings();
+                        renderGroups();
+                    };
 
-                    if (j > 0) { const delBtn = document.createElement("button"); delBtn.textContent = "削除"; delBtn.onclick = () => { deleteWord(i, j); }; rightLine.appendChild(delBtn); }
-                    rightCol.appendChild(rightLine);
+                    const upBtn = document.createElement("button"); upBtn.textContent = "↑"; upBtn.title = "単語を上に移動"; upBtn.onclick = () => moveWord(i, j, -1);
+                    const downBtn = document.createElement("button"); downBtn.textContent = "↓"; downBtn.title = "単語を下に移動"; downBtn.onclick = () => moveWord(i, j, 1);
+
+                    rightSection.appendChild(rightInput);
+                    rightSection.appendChild(extraCheck);
+                    rightSection.appendChild(upBtn);
+                    rightSection.appendChild(downBtn);
+
+                    if (j > 0) {
+                        const delBtn = document.createElement("button");
+                        delBtn.textContent = "×";
+                        delBtn.title = "削除";
+                        delBtn.onclick = () => { deleteWord(i, j); };
+                        rightSection.appendChild(delBtn);
+                    } else {
+                        // Spacer for align - Use dummy button to ensure exact width match
+                        const dum = document.createElement("button");
+                        dum.textContent = "×";
+                        dum.style.visibility = "hidden";
+                        dum.style.pointerEvents = "none";
+                        rightSection.appendChild(dum);
+                    }
+
+                    mainRow.appendChild(rightSection);
+                    wordContainer.appendChild(mainRow);
+
+                    // --- Trigger Row (Conditional) ---
+                    if (w.useExtra) {
+                        const triggerRow = document.createElement("div");
+                        triggerRow.style.display = "flex";
+                        triggerRow.style.marginTop = "4px";
+                        triggerRow.style.paddingLeft = "calc(40% + 8px)"; // Indent to align with text input
+
+                        const labelSpan = document.createElement("span");
+                        labelSpan.textContent = "条件:";
+                        labelSpan.style.fontSize = "0.8em";
+                        labelSpan.style.color = "#777";
+                        labelSpan.style.marginRight = "4px";
+                        labelSpan.style.flexShrink = "0";
+
+                        const extraInput = document.createElement("textarea");
+                        extraInput.className = "trigger-area";
+                        extraInput.style.flexGrow = "1";
+                        extraInput.style.fontSize = "0.9em";
+                        extraInput.placeholder = "出現条件 (例: 単語A & 単語B)\n空欄の場合は常に有効";
+                        extraInput.value = w.extraText || "";
+                        extraInput.rows = 1;
+
+                        extraInput.oninput = () => {
+                            groups[i].words[j].extraText = extraInput.value;
+                            saveSettings();
+                            triggerRecalculate();
+                            autoResize(extraInput);
+                        };
+                        // Initial resize
+                        setTimeout(() => autoResize(extraInput), 0);
+
+                        triggerRow.appendChild(labelSpan);
+                        triggerRow.appendChild(extraInput);
+                        wordContainer.appendChild(triggerRow);
+                    }
+
+                    columns.appendChild(wordContainer);
                 });
-
-                columns.appendChild(leftCol);
-                columns.appendChild(rightCol);
+                // add button
                 details.appendChild(columns);
 
-                // add button
                 const addDiv = document.createElement("div"); addDiv.className = "bottom";
-                const addBtn = document.createElement("button"); addBtn.textContent = "単語を追加"; addBtn.onclick = () => { groups[i].words.push({ text: "", weight: 1 }); saveSettings(); renderGroups(); };
+                const addBtn = document.createElement("button"); addBtn.textContent = "単語を追加"; addBtn.title = "新しい単語行を追加します"; addBtn.onclick = () => { groups[i].words.push({ text: "", weight: 1 }); saveSettings(); renderGroups(); };
                 addDiv.appendChild(addBtn);
                 details.appendChild(addDiv);
 
@@ -397,142 +763,874 @@
 
                 // 初回描画時に計算
                 triggerRecalculate();
+                triggerRecalculate();
             });
         }
 
+        function updateGroupCount(i, type, val) {
+            const v = parseInt(val) || 0;
+            groups[i][type] = v;
+
+            // Min/Maxが変わったのでPeakが範囲外に出ないようにクランプする
+            const countMin = Math.min(groups[i].min || 0, groups[i].max || 0);
+            const countMax = Math.max(groups[i].min || 0, groups[i].max || 0);
+
+            // Peakが存在しない場合はMinをデフォルトとする
+            let peak = (groups[i].peak !== undefined) ? groups[i].peak : countMin;
+
+            if (peak < countMin) peak = countMin;
+            if (peak > countMax) peak = countMax;
+
+            groups[i].peak = peak;
+
+            saveSettings();
+            renderGroups(); // Re-render triggers canvas redraw via setTimeout
+            triggerRecalculate();
+        }
+
+        function updateGroupDist(i, type, val) {
+            groups[i][type] = parseFloat(val);
+            // 数値表示の更新 (兄弟要素がspanなら更新)
+            // Peak/Sigmaは直後にspanがある。Skew/Kurtosisはないので無視される(null check)。
+            if (event && event.target && event.target.nextElementSibling && event.target.nextElementSibling.tagName === "SPAN") {
+                event.target.nextElementSibling.textContent = Number(val).toFixed(2);
+            }
+
+            // Canvas更新
+            const canvas = document.getElementById(`dist-canvas-${i}`);
+            if (canvas) {
+                const g = groups[i];
+                const min = g.min || 0;
+                const max = g.max || 0;
+                const peak = g.peak !== undefined ? g.peak : min;
+                const sigma = g.sigma !== undefined ? g.sigma : 1.0;
+                const skew = g.skew || 0;
+                const kurtosis = g.kurtosis || 0;
+                drawDistCanvas(canvas, min, max, peak, sigma, skew, kurtosis);
+            }
+
+            saveSettings();
+            triggerRecalculate();
+        }
+
+        function drawDistCanvas(canvas, min, max, peak, sigma, skew, kurtosis) {
+            // Fix Aspect Ratio: Resize canvas to display size
+            if (canvas.clientWidth > 0 && canvas.clientWidth !== canvas.width) {
+                canvas.width = canvas.clientWidth;
+                // Note: changing width clears canvas, which is fine as we are about to redraw
+            }
+
+            const ctx = canvas.getContext("2d");
+            const W = canvas.width;
+            const H = canvas.height;
+            const textH = 9; // Text area height at bottom
+            const graphH = H - textH - 1; // -1 for margin
+
+            ctx.clearRect(0, 0, W, H);
+
+            // Background for graph area
+            // ctx.fillStyle = "#fafafa";
+            // ctx.fillRect(0, 0, W, graphH);
+
+            if (min > max) [min, max] = [max, min];
+            const range = max - min;
+
+            // Gradient / Heatmap
+            // 範囲内の各ピクセルについて、その位置の値に対する Gaussian Weight を計算し、Opacityまたは色に反映
+            // minが0, maxが10なら、x=0は0, x=Wは10
+
+            // Calculate normalization factor (Sum of weights)
+            let weightSum = 0;
+            const start = Math.ceil(min);
+            const end = Math.floor(max);
+
+            if (sigma <= 0.01) {
+                weightSum = 1;
+            } else {
+                for (let k = start; k <= end; k++) {
+                    weightSum += getDistributionWeight(k, peak, sigma, skew, kurtosis);
+                }
+                if (weightSum === 0) weightSum = 1;
+            }
+
+            // 各整数点の確率を保持
+            const probMap = {};
+            for (let k = start; k <= end; k++) {
+                let p = 0;
+                if (sigma <= 0.01) {
+                    p = (k === Math.round(peak)) ? 1.0 : 0.0;
+                } else {
+                    const w = getDistributionWeight(k, peak, sigma, skew, kurtosis);
+                    p = w / weightSum;
+                }
+                probMap[k] = p;
+            }
+
+            const imageData = ctx.createImageData(W, graphH);
+            const data = imageData.data;
+
+            for (let x = 0; x < W; x++) {
+                const ratio = x / W;
+                const val = min + ratio * (max - min);
+
+                // 線形補間 (Linear Interpolation between integer points)
+                const k1 = Math.floor(val);
+                const k2 = Math.ceil(val);
+
+                const p1 = probMap[k1] !== undefined ? probMap[k1] : 0;
+                const p2 = probMap[k2] !== undefined ? probMap[k2] : 0;
+
+                let prob = 0;
+                if (k1 === k2) {
+                    prob = p1;
+                } else {
+                    const frac = val - k1;
+                    prob = p1 * (1 - frac) + p2 * frac;
+                }
+
+                // Heatmap Color: Red with Alpha
+                // Gainなし (確率100% -> Alpha 255)
+                const alphaVal = Math.min(255, prob * 255);
+
+                for (let y = 0; y < graphH; y++) {
+                    const idx = (y * W + x) * 4;
+                    data[idx] = 255;     // R
+                    data[idx + 1] = 50;  // G
+                    data[idx + 2] = 50;  // B
+                    data[idx + 3] = alphaVal; // Alpha
+                }
+            }
+            ctx.putImageData(imageData, 0, 0);
+
+            // Outline
+            ctx.strokeStyle = "#ccc";
+            ctx.lineWidth = 1;
+            ctx.strokeRect(0, 0, W, graphH);
+
+            // Draw Peak Line
+            if (range > 0 || min === max) {
+                const peakRatio = (range === 0) ? 0.5 : (peak - min) / range;
+                const peakX = Math.floor(peakRatio * W);
+
+                ctx.beginPath();
+                ctx.moveTo(peakX, 0);
+                ctx.lineTo(peakX, graphH + 2);
+                ctx.strokeStyle = "#333";
+                ctx.lineWidth = 1;
+                ctx.stroke();
+
+                // Texts
+                ctx.fillStyle = "#666";
+                ctx.font = "8px sans-serif";
+                ctx.textAlign = "left";
+                ctx.fillText(min, 2, H - 1);
+
+                ctx.textAlign = "right";
+                ctx.fillText(max, W - 2, H - 1);
+
+                ctx.textAlign = "center";
+                // Peak値が端に近いと重なるので調整
+                let peakTextX = peakX;
+                if (peakTextX < 20) peakTextX = 20;
+                if (peakTextX > W - 20) peakTextX = W - 20;
+
+                ctx.fillStyle = "#d00";
+                ctx.font = "bold 9px sans-serif";
+                ctx.fillText(Number(peak).toFixed(2), peakTextX, H - 1);
+            }
+        }
+
+        // Global cache (declared above at line 312)
+        // globalWordProbs used here
+
         function calculateAndRenderProbabilities() {
-            // 解析的近似計算 (Analytical Approximation)
-            // 1. 各グループごとの単語当選確率 (条件付き) を計算
-            // 2. 固定点反復法でグループ実行確率と単語全体確率を収束させる
+            try {
+                // 解析的近似計算 (Analytical Approximation)
+                // 1. 各グループごとの単語当選確率 (条件付き) を計算
+                // 2. 固定点反復法でグループ実行確率と単語全体確率を収束させる
 
-            // Stats containers
-            const groupExecProbs = new Array(groups.length).fill(0); // P(Group executes)
-            const wordInGroupProbs = groups.map(() => []); // P(Word is chosen | Group executes)
+                // Step 1: Initialize & Pre-calculate conditional probabilities
+                // (Conditional on Group Execution)
+                const wordInGroupProbs = groups.map(() => []); // [GroupIndex][WordIndex] -> Prob(0.0~1.0)
+                // groupExecProbs is now only for valid display, not used for word calculation dependency directly
+                let groupExecProbs = new Array(groups.length).fill(0);
 
-            // Step 1: Initialize & Pre-calculate conditional probabilities
-            groups.forEach((g, i) => {
-                const totalWeight = g.words.reduce((sum, w) => sum + (parseInt(w.weight) || 0), 0);
-                const avgCount = ((g.min || 0) + (g.max || 0)) / 2;
+                groups.forEach((g, i) => {
+                    const totalWeight = g.words.reduce((sum, w) => sum + (parseInt(w.weight) || 0), 0);
 
-                g.words.forEach((w, j) => {
-                    let p = 0;
-                    if (totalWeight > 0) {
-                        // 近似: (重み/全体) * 抽選回数。ただし100%を超えない。
-                        // 非復元抽出の厳密計算は複雑すぎるため、期待値ベースで近似する
-                        p = Math.min(1.0, ((parseInt(w.weight) || 0) / totalWeight) * avgCount);
+                    // 変更: 単純平均ではなく、実抽選ロジック(pickCountWithProb)に基づいた期待値を計算する
+                    // 変更: 単純平均ではなく、実抽選ロジック(pickCountWithProb)に基づいた期待値を計算する
+                    const min = (g.min !== undefined) ? parseInt(g.min) : 1;
+                    const max = (g.max !== undefined) ? parseInt(g.max) : 1;
+                    const rMin = Math.min(min, max);
+                    const rMax = Math.max(min, max);
+
+                    const peak = (g.peak !== undefined) ? Number(g.peak) : min;
+                    const sigma = (g.sigma !== undefined) ? Number(g.sigma) : 1.0;
+                    const skew = Number(g.skew || 0);
+                    const kurtosis = Number(g.kurtosis || 0);
+
+                    // Pre-calculate distribution probabilities P(Count=n)
+                    const distProbs = [];
+                    let wSum = 0;
+                    for (let n = rMin; n <= rMax; n++) {
+                        let w = getDistributionWeight(n, peak, sigma, skew, kurtosis);
+                        if (isNaN(w) || !isFinite(w)) w = 0;
+                        distProbs.push({ n: n, w: w });
+                        wSum += w;
                     }
-                    wordInGroupProbs[i].push(p);
 
-                    // 単純なグループ内確率表示 (UI更新)
-                    const span = document.getElementById(`prob-${i}-${j}`);
-                    if (span) {
-                        // 既存のHTML構造を維持しつつ更新
-                        const probPct = totalWeight > 0 ? (((parseInt(w.weight) || 0) / totalWeight) * 100).toFixed(1) : "-";
-                        // 後で全体確率を追加するために一旦セット
-                        span.setAttribute("data-local-prob", probPct);
+                    // Normalize
+                    if (wSum > 0) {
+                        distProbs.forEach(item => item.w /= wSum);
+                    } else {
+                        // Fallback to equal or single point if sum is 0 (shouldn't happen if range exists)
+                        if (distProbs.length > 0) distProbs[0].w = 1.0;
+                    }
+
+                    g.words.forEach((w, j) => {
+                        let p = 0;
+                        let probShare = 0;
+
+                        if (totalWeight > 0) {
+                            probShare = (parseInt(w.weight) || 0) / totalWeight;
+                            // P(select) = Sum [ P(C=n) * min(1.0, n * probShare) ]
+                            // This correctly handles the saturation at 1.0
+                            p = distProbs.reduce((acc, item) => {
+                                // Assuming simple proportional probability without replacement approx:
+                                // Probability of being picked in n draws ~ min(1, n * share)
+                                // For equal weights, this is exact (n/N).
+                                return acc + item.w * Math.min(1.0, item.n * probShare);
+                            }, 0);
+                        }
+
+                        if (isNaN(p)) p = 0;
+                        wordInGroupProbs[i].push(p);
+
+                        // 単純なグループ内確率表示 (UI更新)
+                        // ここは「グループが選ばれたときに選ばれる確率」(Conditional)
+                        const span = document.getElementById(`prob-${i}-${j}`);
+                        if (span) {
+                            // 既存のHTML構造を維持しつつ更新
+                            // ユーザー要望により、手前の表示は単純な重み割合に戻す
+                            const probPct = totalWeight > 0 ? (((parseInt(w.weight) || 0) / totalWeight) * 100).toFixed(1) : "-";
+
+                            // 後で単語の実行確率を追加するために一旦セット
+                            span.setAttribute("data-local-prob", probPct);
+                        }
+                    });
+
+                    // For display only, initial estimate
+                    if (g.enabled && !g.isSubgroup) {
+                        groupExecProbs[i] = 1.0;
+                    } else if (!g.enabled) {
+                        groupExecProbs[i] = 0.0;
                     }
                 });
 
-                if (g.enabled && !g.isSubgroup) {
-                    groupExecProbs[i] = 1.0; // 通常グループは常に実行される(とみなす)
-                } else if (!g.enabled) {
-                    groupExecProbs[i] = 0.0;
+                // Store Step 1 (Unconditional) Probs properly for Step 2 usage
+                // wordInGroupProbs[i][j] currently holds P(Pick | GroupExec) assuming NO triggers.
+                const baseWordInGroupProbs = groups.map((g, i) => [...wordInGroupProbs[i]]);
+
+                // Prepare Group ASTs for logic filtering
+                const groupASTs = groups.map(g => {
+                    if ((g.isSubgroup || g.triggers) && g.triggers) {
+                        try { return parseExpr(g.triggers); } catch { return null; }
+                    }
+                    return null;
+                });
+
+                // 2. Fixed Point Iteration
+                let currentTotalWordProbs = {};
+
+                // Helper: Collects all unique WORD node values from an AST
+                function findVariables(node, variablesSet) {
+                    if (!node) return;
+                    if (node.type === "WORD") {
+                        variablesSet.add(node.value);
+                    }
+                    if (node.children) {
+                        for (const c of node.children) {
+                            findVariables(c, variablesSet);
+                        }
+                    }
                 }
-            });
 
-            // Step 2: Fixed Point Iteration
-            // 依存関係（ある単語が選ばれる -> トリガーが引かれる -> サブグループ実行 -> 別の単語が選ばれる）
-            // を解決するため、数回ループさせる
-            let currentTotalWordProbs = {}; // Word Text -> Probability(0.0~1.0)
+                // Helper: Calculate Group Total "Probability Mass" given a fixed set of token states
+                // Weight used here is: GroupExecProb * UnconditionalProb
+                function calcGroupTotalWeight(groupIndex, fixedToken, fixedValue, inputProbs) {
+                    const g = groups[groupIndex];
+                    let totalW = 0;
+                    const gExec = groupExecProbs[groupIndex] || 0;
 
-            for (let iter = 0; iter < 5; iter++) {
-                // 2-a. Calculate Total Word Probabilities based on current Group Exec Probs
-                const tempWordProbs = {};
+                    g.words.forEach((w, k) => {
+                        const uncP = baseWordInGroupProbs[groupIndex][k];
+                        const effWeight = gExec * uncP;
 
+                        let prob = 1.0;
+                        if (w.useExtra && w.extraText) {
+                            try {
+                                let ast = parseExpr(w.extraText);
+                                let tempProbs = { ...inputProbs };
+                                if (fixedToken) tempProbs[fixedToken] = fixedValue ? 1.0 : 0.0;
+                                prob = evalProbSmart(ast, tempProbs);
+                            } catch (e) { prob = 0; }
+                        }
+                        totalW += effWeight * prob;
+                    });
+                    return totalW;
+                }
+
+                for (let iter = 0; iter < 5; iter++) {
+                    let nextTotalWordProbs = {};
+
+                    // Prepare Input Probs for this iteration
+                    let inputProbs = currentTotalWordProbs;
+
+                    // 2a. Calculate Group Total Execution Probabilities
+                    groupExecProbs = groups.map((g, i) => {
+                        if (!g.enabled) return 0;
+                        if (g.isSubgroup && g.triggers) {
+                            try {
+                                return evalProbSmart(parseExpr(g.triggers), inputProbs);
+                            } catch { return 0; }
+                        }
+                        return 1.0;
+                    });
+
+                    // 2b. Calculate Word Probabilities (Differential Method)
+                    groups.forEach((g, i) => {
+                        if (!g.enabled) return;
+
+                        const wordASTs = g.words.map(w => {
+                            if (w.useExtra && w.extraText) {
+                                try { return parseExpr(w.extraText); } catch { return null; }
+                            }
+                            return null;
+                        });
+
+                        // 0. Pre-calculation Phase
+                        // Build Token Map and Dist Probs
+                        const tokenToGroupMap = {}; // "Word" -> { gIndex, wIndex, rawWeight }
+
+                        groups.forEach((g, gIdx) => {
+                            // Calc Dist Probs
+                            const min = (g.min !== undefined) ? parseInt(g.min) : 1;
+                            const max = (g.max !== undefined) ? parseInt(g.max) : 1;
+                            const rMin = Math.min(min, max);
+                            const rMax = Math.max(min, max);
+                            const peak = (g.peak !== undefined) ? Number(g.peak) : min;
+                            const sigma = (g.sigma !== undefined) ? Number(g.sigma) : 1.0;
+                            const skew = Number(g.skew || 0);
+                            const kurtosis = Number(g.kurtosis || 0);
+
+                            let distProbs = [];
+                            let wSum = 0;
+                            for (let n = rMin; n <= rMax; n++) {
+                                let w = getDistributionWeight(n, peak, sigma, skew, kurtosis);
+                                if (isNaN(w) || !isFinite(w)) w = 0;
+                                distProbs.push({ n: n, w: w });
+                                wSum += w;
+                            }
+                            if (wSum > 0) distProbs.forEach(d => d.w /= wSum);
+                            else if (distProbs.length > 0) distProbs[0].w = 1.0;
+
+                            g.distProbs = distProbs;
+
+                            // Total Raw Weight (for physics calc)
+                            g.totalRawWeight = g.words.reduce((sum, w) => sum + (parseInt(w.weight) || 0), 0);
+
+                            // Register Tokens (First Come First Serve - Primary Source Assumption)
+                            g.words.forEach((w, wIdx) => {
+                                if (w.text && !tokenToGroupMap[w.text.trim()]) {
+                                    tokenToGroupMap[w.text.trim()] = {
+                                        gIdx: gIdx,
+                                        weight: parseInt(w.weight) || 0
+                                    };
+                                }
+                            });
+                        });
+
+                        // Helper to get Source Group Probability for a partial state
+                        // Returns P( state vars | group physics )
+                        function calcSourceGroupProb(srcGIdx, onVarWeights, offVarWeights) {
+                            const g = groups[srcGIdx];
+                            if (!g || !g.enabled) return 0;
+
+                            const W_total = g.totalRawWeight;
+                            const W_off = offVarWeights.reduce((a, b) => a + b, 0);
+                            const W_on_list = onVarWeights;
+
+                            const W_U = W_total - W_off;
+                            if (W_U <= 0 && W_on_list.length > 0) return 0;
+
+                            if (W_on_list.length === 0) {
+                                let p = 0;
+                                for (const d of g.distProbs) {
+                                    if (d.w <= 0) continue;
+                                    if (W_total <= 0) { p += (d.n === 0 ? d.w : 0); continue; }
+                                    p += d.w * Math.pow(Math.max(0, W_U / W_total), d.n);
+                                }
+                                return p;
+                            }
+
+                            const onCount = W_on_list.length;
+                            const comboCount = 1 << onCount;
+                            let totalP = 0;
+
+                            for (const d of g.distProbs) {
+                                if (d.w <= 0) continue;
+                                if (d.n === 0) continue;
+
+                                let probK = 0;
+                                for (let s = 0; s < comboCount; s++) {
+                                    let subsetWeight = 0;
+                                    let subsetSize = 0;
+                                    for (let bit = 0; bit < onCount; bit++) {
+                                        if ((s >> bit) & 1) {
+                                            subsetWeight += W_on_list[bit];
+                                            subsetSize++;
+                                        }
+                                    }
+
+                                    const W_eff = W_U - subsetWeight;
+                                    if (W_eff < 0) continue;
+
+                                    const term = Math.pow(Math.max(0, W_eff / W_total), d.n);
+
+                                    if (subsetSize % 2 === 1) probK -= term;
+                                    else probK += term;
+                                }
+                                totalP += d.w * probK;
+                            }
+                            return totalP;
+                        }
+
+                        // Prepare Group ASTs for logic filtering
+                        // (Already defined above or below? Check context)
+                        // Assuming groupASTs is defined before this block in user code if not overwritten.
+                        // Re-checking lines: groupASTs definition was around line 965.
+                        // We are replacing lines 1036-1049.
+
+                        let uniqueTokens = new Set();
+                        wordASTs.forEach(ast => {
+                            if (ast) findVariables(ast, uniqueTokens);
+                        });
+                        // Add Group Trigger Variables to uniqueTokens
+                        if (groupASTs[i]) findVariables(groupASTs[i], uniqueTokens);
+
+                        // 2b. Strategy Branch
+                        const isExact = uniqueTokens.size <= 16;
+                        const variables = Array.from(uniqueTokens);
+                        const N = variables.length;
+
+                        // Parse Weights (Raw)
+                        const rawWeights = g.words.map(w => parseInt(w.weight) || 0);
+
+                        // Pre-calc Pick Count Distribution P(Count=k)
+                        const totalRawWeight = rawWeights.reduce((a, b) => a + b, 0); // Static Total (for dist calc param if needed? no, dist depends on G settings)
+
+                        const min = (g.min !== undefined) ? parseInt(g.min) : 1;
+                        const max = (g.max !== undefined) ? parseInt(g.max) : 1;
+                        const rMin = Math.min(min, max);
+                        const rMax = Math.max(min, max);
+                        const peak = (g.peak !== undefined) ? Number(g.peak) : min;
+                        const sigma = (g.sigma !== undefined) ? Number(g.sigma) : 1.0;
+                        const skew = Number(g.skew || 0);
+                        const kurtosis = Number(g.kurtosis || 0);
+
+                        let distProbs = [];
+                        let wSum = 0;
+                        for (let n = rMin; n <= rMax; n++) {
+                            let w = getDistributionWeight(n, peak, sigma, skew, kurtosis);
+                            if (isNaN(w) || !isFinite(w)) w = 0;
+                            distProbs.push({ n: n, w: w });
+                            wSum += w;
+                        }
+                        if (wSum > 0) distProbs.forEach(d => d.w /= wSum);
+                        else if (distProbs.length > 0) distProbs[0].w = 1.0;
+
+                        // Helper Function: P(Selected | myW, totalW) based on Dist
+                        // f(w, S) = Sum[ P(k) * min(1, k * w/S) ]
+                        function calcProbFunc(w, S) {
+                            if (S <= 0) return 0;
+                            let p = 0;
+                            for (const d of distProbs) {
+                                p += d.w * Math.min(1.0, d.n * w / S);
+                            }
+                            return p;
+                        }
+
+                        // Helper Derivative for Taylor: f'(S) w.r.t S (Total Weight)
+                        // d/dS [ k*w/S ] = -k*w/S^2
+                        // min(1, A) derivative is 0 if A>1, else 1.
+                        // So sum [ P(k) * ( (k*w/S < 1) ? (-k*w/S^2) : 0 ) ]
+                        function calcProbDeriv(w, S) {
+                            if (S <= 0) return 0;
+                            let slope = 0;
+                            for (const d of distProbs) {
+                                if ((d.n * w / S) < 1.0) {
+                                    slope += d.w * (-d.n * w / (S * S));
+                                }
+                            }
+                            return slope;
+                        }
+
+
+                        g.words.forEach((w, j) => {
+                            let myWeight = rawWeights[j];
+                            if (myWeight <= 0) {
+                                wordInGroupProbs[i][j] = 0;
+                                return;
+                            }
+
+                            // Check static validity if needed (e.g. constant False)
+                            let myAST = null;
+                            if (w.useExtra && w.extraText) {
+                                try { myAST = parseExpr(w.extraText); } catch { }
+                            }
+
+                            // *** EXACT METHOD ***
+                            if (isExact) {
+                                let expectedProb = 0;
+                                const totalStates = 1 << N;
+
+                                for (let s = 0; s < totalStates; s++) {
+                                    // 1. Calc State Prob P(S)
+                                    let pState = 1.0;
+                                    let currentVarState = {};
+                                    // Define Source Group containers
+                                    const groupStates = new Map();
+                                    const unknownVarProbs = [];
+
+                                    for (let v = 0; v < N; v++) {
+                                        const isOn = (s >> v) & 1;
+                                        const token = variables[v];
+                                        currentVarState[token] = isOn;
+
+                                        const src = tokenToGroupMap[token];
+                                        if (src) {
+                                            if (!groupStates.has(src.gIdx)) groupStates.set(src.gIdx, { on: [], off: [] });
+                                            const gSt = groupStates.get(src.gIdx);
+                                            if (isOn) gSt.on.push(src.weight);
+                                            else gSt.off.push(src.weight);
+                                        } else {
+                                            const pVar = inputProbs[token] || 0;
+                                            unknownVarProbs.push(isOn ? pVar : (1 - pVar));
+                                        }
+                                    }
+
+                                    // Calc Group Probs
+                                    for (const [gIdx, st] of groupStates.entries()) {
+                                        const gp = calcSourceGroupProb(gIdx, st.on, st.off);
+                                        pState *= gp;
+                                    }
+                                    // Calc Unknown Vars
+                                    for (const p of unknownVarProbs) pState *= p;
+
+                                    if (pState <= 0) continue;
+
+                                    // 1b. GROUP TRIGGER CHECK
+                                    // If group trigger is not met in this state, the group is inactive.
+                                    // This state contributes 0 to the sum.
+                                    let isGroupActive = true;
+                                    if (groupASTs[i]) {
+                                        try {
+                                            isGroupActive = evalBoolAST(groupASTs[i], currentVarState);
+                                        } catch { isGroupActive = false; }
+                                    }
+                                    if (!isGroupActive) continue;
+
+
+                                    // 2. Calc Valid Total Weight in this State
+                                    let stateTotalW = 0;
+                                    let amIValid = true;
+
+                                    for (let k = 0; k < g.words.length; k++) {
+                                        const targetW = g.words[k];
+                                        let valid = true;
+                                        if (targetW.useExtra && targetW.extraText) {
+                                            try {
+                                                valid = evalBoolStatic(targetW.extraText, currentVarState);
+                                            } catch { valid = false; }
+                                        }
+                                        if (valid) {
+                                            stateTotalW += rawWeights[k];
+                                        }
+                                        if (k === j) amIValid = valid;
+                                    }
+
+                                    if (amIValid && stateTotalW > 0) {
+                                        // Use Pick Count Aware Function
+                                        expectedProb += pState * calcProbFunc(myWeight, stateTotalW);
+                                    }
+                                }
+                                // Normalize by Group Execution Probability to get Conditional Probability
+                                const gExec = groupExecProbs[i] || 0;
+                                wordInGroupProbs[i][j] = (gExec > 0) ? (expectedProb / gExec) : 0;
+                            }
+                            // *** TAYLOR EXPANSION METHOD ***
+                            else {
+                                // Calculate Mean E[S] and Cov[Ij, S] using Source Group Logic
+                                // S = Sum(W_k * I_k)
+                                // E[S] = Sum(W_k * E[I_k])
+                                // Cov[Ij, S] = Sum_k(W_k * Cov[Ij, Ik])
+                                // Cov[Ij, Ik] = E[Ij * Ik] - E[Ij]*E[Ik]
+
+                                const pValid = new Array(g.words.length).fill(0);
+                                const jointP = new Array(g.words.length).map(() => new Array(g.words.length).fill(0));
+
+                                // Calc E[I_k] and E[I_j * I_k] using Source Groups
+                                // Iterate all pairs? No, for N > 16, full enumeration is too heavy.
+                                // We need "Pairwise" probabilities for Source Groups.
+                                // calcSourceGroupProb supports partial ON/OFF.
+                                // P(I_k) -> ON={k}, OFF={}
+                                // P(I_j * I_k) -> ON={j, k}, OFF={}
+
+                                // Optimization: Only calculate needed pairs
+                                // Actually, for Taylor we iterate k (words in group).
+                                // Step 1: Calc P(I_k) for all k
+                                for (let k = 0; k < g.words.length; k++) {
+                                    // Check static validity
+                                    let ast = (g.words[k].useExtra && g.words[k].extraText) ? parseExpr(g.words[k].extraText) : null;
+
+                                    // Identify variables for this word
+                                    let vars = new Set();
+                                    if (ast) findVariables(ast, vars);
+
+                                    // If no vars, it's 1.0 (unless static false?)
+                                    if (vars.size === 0) {
+                                        pValid[k] = 1.0;
+                                        continue;
+                                    }
+
+                                    // Divide vars into groups
+                                    const groupStates = new Map();
+                                    const unknownVarProbs = [];
+
+                                    for (const v of vars) {
+                                        const src = tokenToGroupMap[v];
+                                        if (src) {
+                                            if (!groupStates.has(src.gIdx)) groupStates.set(src.gIdx, { on: [], off: [] });
+                                            groupStates.get(src.gIdx).on.push(src.weight);
+                                            // Note: In strict logic, "I_k is true" means "Condition is True".
+                                            // If condition is simple "Word A", then A must be ON.
+                                            // If condition is "A & B", both ON. "A | B", complicated.
+                                            // Logic evaluation for general expression P(E) using Prob is hard with inclusion-exclusion directly.
+                                            // Fallback: Use simple evalProbSmart with "Independent" assumption for Taylor?
+                                            // The user asked for "Approximation" to avoid explosion.
+                                            // Using independent inputProbs is the standard Taylor approx.
+                                        } else {
+                                            unknownVarProbs.push(inputProbs[v] || 0);
+                                        }
+                                    }
+
+                                    // Fallback for Taylor: Use evalProbSmart which treats inputs as independent probabilities
+                                    // But we should use the "Source Group Corrected" probabilities for single tokens if possible?
+                                    // P(Token A) = GroupProb(A selected)
+                                    // Let's rely on standard evalProbSmart using inputProbs.
+                                    // The inputProbs are result of *previous* iteration's calculation.
+                                    try {
+                                        pValid[k] = evalProbSmart(ast, inputProbs);
+                                    } catch { pValid[k] = 0; }
+
+                                    // Apply Group Trigger?
+                                    if (groupASTs[i]) {
+                                        try {
+                                            pValid[k] *= evalProbSmart(groupASTs[i], inputProbs);
+                                        } catch { }
+                                    }
+                                }
+
+                                // E[S]
+                                let E_S = 0;
+                                for (let k = 0; k < g.words.length; k++) E_S += rawWeights[k] * pValid[k];
+
+                                // Cov(I_j, S) loop
+                                let E_Ij_S = 0;
+                                for (let k = 0; k < g.words.length; k++) {
+                                    let jointP = 0;
+                                    if (k === j) {
+                                        jointP = pValid[j];
+                                    } else {
+                                        // P(J & K) approx
+                                        // If variables disjoint, P(J)*P(K).
+                                        // If share variables, complex.
+                                        // Using evalProbSmart on "J & K" handles basic overlapping.
+                                        let exprJ = (g.words[j].useExtra && g.words[j].extraText) ? g.words[j].extraText : "true";
+                                        let exprK = (g.words[k].useExtra && g.words[k].extraText) ? g.words[k].extraText : "true";
+
+                                        // Add GroupTrigger
+                                        let triggeredExpr = groupASTs[i] ? `(${exprJ}) & (${exprK}) & (${g.triggers})` : `(${exprJ}) & (${exprK})`;
+
+                                        try {
+                                            let ast = parseExpr(triggeredExpr);
+                                            jointP = evalProbSmart(ast, inputProbs);
+                                        } catch { jointP = 0; }
+                                    }
+                                    E_Ij_S += rawWeights[k] * jointP;
+                                }
+
+                                let Cov_Ij_S = E_Ij_S - (pValid[j] * E_S);
+
+                                if (E_S <= 0.0001) {
+                                    wordInGroupProbs[i][j] = 0;
+                                } else {
+                                    const baseVal = calcProbFunc(myWeight, E_S);
+                                    const deriv = calcProbDeriv(myWeight, E_S);
+
+                                    let val = (pValid[j] * baseVal) + (Cov_Ij_S * deriv);
+
+                                    if (val < 0) val = 0;
+                                    if (val > 1) val = 1;
+
+                                    // Normalize for consistency with Exact Method structure?
+                                    // Taylor output is already "Probability of execution".
+                                    // But Exact Method output was P(W|G) * P(G).
+                                    // If we want to store Conditional Prob in wordInGroupProbs, we divide by P(G).
+                                    // Let's keep wordInGroupProbs as P(W | G) for UI consistency (prob within group).
+
+                                    const gExec = groupExecProbs[i] || 0;
+                                    wordInGroupProbs[i][j] = (gExec > 0) ? (val / gExec) : 0;
+                                }
+                            }
+
+                            // Final Register to Global
+                            // Now wordInGroupProbs[i][j] is P(Word | Group Exists)
+                            // We need P(Word) = P(G) * P(W|G)
+                            const gExec = groupExecProbs[i] || 0;
+                            const pFinal = wordInGroupProbs[i][j] * gExec;
+
+                            if (pFinal > 0 && w.text) {
+                                const key = w.text.trim();
+                                if (!nextTotalWordProbs[key]) nextTotalWordProbs[key] = 0;
+                                nextTotalWordProbs[key] += pFinal;
+                            }
+                        });
+
+
+                        // Helper for Exact Method Boolean Eval
+                        function evalBoolStatic(expr, varState) {
+                            // Simple recursive eval or parse & eval
+                            const ast = parseExpr(expr);
+                            return evalBoolAST(ast, varState);
+                        }
+                        function evalBoolAST(node, varState) {
+                            if (!node) return true;
+                            if (node.type === 'WORD') return !!varState[node.value];
+                            if (node.type === 'CONST') return !!node.value;
+                            if (node.type === 'NOT') return !evalBoolAST(node.children[0], varState);
+                            if (node.type === 'AND') return evalBoolAST(node.children[0], varState) && evalBoolAST(node.children[1], varState);
+                            if (node.type === 'OR') return evalBoolAST(node.children[0], varState) || evalBoolAST(node.children[1], varState);
+                            return false;
+                        }
+                    });
+
+                    currentTotalWordProbs = nextTotalWordProbs;
+                }
+                globalWordProbs = currentTotalWordProbs;
+
+                // Step 3: Render to UI
                 groups.forEach((g, i) => {
-                    const execP = groupExecProbs[i];
-                    if (execP <= 0) return;
+                    // グループ実行確率
+                    const execSpan = document.getElementById(`group-exec-prob-${i}`);
+                    if (execSpan) {
+                        const pct = (groupExecProbs[i] * 100).toFixed(1);
+                        execSpan.textContent = `(実行確率: ${pct}%)`;
+                    }
 
+
+                    // 単語の実行確率
                     g.words.forEach((w, j) => {
-                        const condP = wordInGroupProbs[i][j];
-                        const actualP = execP * condP;
-                        if (actualP > 0) {
-                            const txt = w.text; // Note: case sensitive exact match
-                            // 和事象 P(A or B) = 1 - (1-P(A))*(1-P(B))
-                            const oldP = tempWordProbs[txt] || 0;
-                            tempWordProbs[txt] = 1 - (1 - oldP) * (1 - actualP);
+                        const span = document.getElementById(`prob-${i}-${j}`);
+                        if (span) {
+                            const localProb = span.getAttribute("data-local-prob");
+                            // TRIM KEY HERE for lookup
+                            const totalProb = currentTotalWordProbs[w.text.trim()] || 0;
+                            const totalProbPct = (totalProb * 100).toFixed(1);
+
+                            // グループ内確率はこれまで通り。横に実行確率を追加。
+                            // タイトル属性で説明を追加
+                            span.title = `左: グループ内確率 (${localProb}%)\n右: 単語の実行確率 (${totalProbPct}%)`;
+                            span.innerHTML = `${localProb}% <span class="prob-total">(${totalProbPct}%)</span>`;
                         }
                     });
                 });
-                currentTotalWordProbs = tempWordProbs;
-
-                // 2-b. Update Subgroup Execution Probabilities based on Triggers
-                let changed = false;
-                groups.forEach((g, i) => {
-                    if (!g.enabled || !g.isSubgroup) return;
-
-                    let execP = 0;
-                    if (g.triggers) {
-                        try {
-                            const ast = parseExpr(g.triggers);
-                            execP = evalProb(ast, currentTotalWordProbs);
-                        } catch (e) { /* ignore parse error in calc */ }
-                    }
-
-                    if (Math.abs(groupExecProbs[i] - execP) > 0.001) {
-                        groupExecProbs[i] = execP;
-                        changed = true;
-                    }
-                });
-
-                if (!changed) break; // Converged
+            } catch (e) {
+                console.error("Prob Calc Error", e);
             }
-
-            // Save to global
-            globalWordProbs = currentTotalWordProbs;
-
-            // Step 3: Render to UI
-            groups.forEach((g, i) => {
-                // グループ実行確率
-                const execSpan = document.getElementById(`group-exec-prob-${i}`);
-                if (execSpan) {
-                    if (g.enabled) {
-                        const pct = (groupExecProbs[i] * 100).toFixed(1);
-                        execSpan.textContent = `(実行確率: ${pct}%)`;
-                    } else {
-                        const pct = "0.0";
-                        execSpan.textContent = `(実行確率: ${pct}%)`;
-                    }
-                }
-
-                // 単語全体確率
-                g.words.forEach((w, j) => {
-                    const span = document.getElementById(`prob-${i}-${j}`);
-                    if (span) {
-                        const localProb = span.getAttribute("data-local-prob");
-                        const totalProb = currentTotalWordProbs[w.text] || 0;
-                        const totalProbPct = (totalProb * 100).toFixed(1);
-
-                        // グループ確率はこれまで通り。横に全体確率を追加。
-                        span.innerHTML = `${localProb}% <span class="prob-total">(${totalProbPct}%)</span>`;
-                    }
-                });
-            });
         }
 
-        function evalProb(node, probs) {
-            if (!node) return 0;
-            if (node.type === "WORD") return probs[node.value] || 0;
+        // --- Smart Evaluation with Shannon Expansion ---
+        // Handles P(A & A) = P(A) correctly by extracting variables and summing conditioned probabilities.
+
+        function evalProbSmart(node, probs) {
+            // 1. Check for variables
+            const firstVar = findFirstVariable(node);
+
+            // 2. Base case: No variables -> Evaluate constant logic
+            if (!firstVar) {
+                return evalConstLogic(node) ? 1.0 : 0.0;
+            }
+
+            // 3. Recursive step: Shannon Expansion
+            // P(E) = P(v) * P(E|v=true) + (1-P(v)) * P(E|v=false)
+            const p = probs[firstVar.trim()] || 0;
+
+            const nodeTrue = substituteVar(node, firstVar, true);
+            const nodeFalse = substituteVar(node, firstVar, false);
+
+            return p * evalProbSmart(nodeTrue, probs) + (1 - p) * evalProbSmart(nodeFalse, probs);
+        }
+
+        function findFirstVariable(node) {
+            if (!node) return null;
+            if (node.type === "WORD") return node.value;
+            if (node.children) {
+                for (const c of node.children) {
+                    const found = findFirstVariable(c);
+                    if (found) return found;
+                }
+            }
+            return null;
+        }
+
+        function substituteVar(node, varName, boolVal) {
+            if (!node) return null;
+            if (node.type === "WORD" && node.value === varName) {
+                return { type: 'CONST', value: boolVal };
+            }
+            if (node.type === "CONST") return node; // already const
+
+            // Clone and recurse
+            const newChildren = (node.children || []).map(c => substituteVar(c, varName, boolVal));
+            return { type: node.type, children: newChildren, value: node.value };
+        }
+
+        function evalConstLogic(node) {
+            if (!node) return false;
+            if (node.type === "CONST") return node.value;
+            if (node.type === "WORD") {
+                // Should not happen if findFirstVariable works, but treat as false (prob 0) if missing key? 
+                // Actually this case implies a word not in list? No, findFirstVariable handles checking.
+                // If we reach here, it means we missed a variable? Or logic error.
+                // Treat as false (0 probability default)
+                return false;
+            }
+            if (node.type === "NOT") {
+                return !evalConstLogic(node.children[0]);
+            }
             if (node.type === "AND") {
-                // P(A & B) assuming independence = P(A) * P(B)
-                return node.children.reduce((acc, c) => acc * evalProb(c, probs), 1);
+                return node.children.every(c => evalConstLogic(c));
             }
             if (node.type === "OR") {
-                // P(A | B) assuming independence = 1 - (1-P(A))*(1-P(B))
-                return 1 - node.children.reduce((acc, c) => acc * (1 - evalProb(c, probs)), 1);
+                return node.children.some(c => evalConstLogic(c));
             }
-            return 0;
+            return false;
         }
+
+        // Old evalProb is removed/replaced by evalProbSmart
+        // function evalProb(node, probs) { ... }
 
         function toggleCollapse(i) { groups[i].collapsed = !groups[i].collapsed; saveSettings(); renderGroups(); }
         function addGroup() { groups.push({ name: "新規グループ", words: [{ text: "", weight: 1 }], enabled: true, min: 0, max: 1, isSubgroup: false, triggers: "", search: true, collapsed: false }); saveSettings(); renderGroups(); }
@@ -565,18 +1663,31 @@
             }
             // Fallback
             const lastIdx = words.length - 1;
-            return { word: words[lastIdx].text, prob: (parseInt(words[lastIdx].weight) || 1) / total, index: lastIdx };
+            return {
+                word: words[lastIdx].text,
+                prob: (parseInt(words[lastIdx].weight) || 1) / total,
+                index: lastIdx
+            };
         }
 
-        function pickCountWithProb(min, max) {
+        function pickCountWithProb(min, max, peak, sigma, skew, kurtosis) {
             if (min > max) [min, max] = [max, min];
+
+            // 正規分布による重み付け
+            if (peak === undefined) peak = peak;
+            if (sigma === undefined) sigma = 1.0;
+            if (skew === undefined) skew = 0;
+            if (kurtosis === undefined) kurtosis = 0;
+
             const values = [];
             const weights = [];
+
             for (let n = min; n <= max; n++) {
-                const w = 1 / (n + 1);
+                const w = getDistributionWeight(n, peak, sigma, skew, kurtosis);
                 values.push(n);
                 weights.push(w);
             }
+
             const total = weights.reduce((a, b) => a + b, 0);
             if (total === 0) return { value: min, prob: 1.0 };
 
@@ -589,130 +1700,416 @@
             return { value: values[values.length - 1], prob: weights[values.length - 1] / total };
         }
 
-        function parseExpr(str) {
-            // 改行は無視して連結する（影響を与えない）
-            // 全角スペースも無視する
-            str = str.replace(/[\r\n\u3000]+/g, "");
-            let i = 0;
-            function skip() { while (str[i] && /\s/.test(str[i])) i++; }
-            function parseFactor() {
-                skip();
-                if (str[i] === "(") { i++; const node = parseOr(); skip(); if (str[i] !== ")") throw new Error(") expected"); i++; return node; }
-                let word = "";
-                while (i < str.length && ![",", "&", ")"].includes(str[i])) {
-                    // 改行も単語の一部にならないように除外
-                    if (/\s/.test(str[i]) && word.length > 0) {
-                        break;
-                    } else if (/\s/.test(str[i])) {
-                        i++;
-                        continue;
-                    }
-                    word += str[i++];
-                }
-                return { type: "WORD", value: word.trim() };
+        function getProbOfCountAtLeast(min, max, threshold, peak, sigma, skew, kurtosis) {
+            if (min > max) [min, max] = [max, min];
+            if (peak === undefined) peak = min;
+            if (sigma === undefined) sigma = 1.0;
+            if (skew === undefined) skew = 0;
+            if (kurtosis === undefined) kurtosis = 0;
+
+            const weights = [];
+            const values = [];
+            for (let n = min; n <= max; n++) {
+                const w = getDistributionWeight(n, peak, sigma, skew, kurtosis);
+                weights.push(w);
+                values.push(n);
             }
-            function parseAnd() { let nodes = [parseFactor()]; while (true) { skip(); if (str[i] === "&") { i++; nodes.push(parseFactor()); } else break; } if (nodes.length === 1) return nodes[0]; return { type: "AND", children: nodes }; }
-            function parseOr() { let nodes = [parseAnd()]; while (true) { skip(); if (str[i] === ",") { i++; nodes.push(parseAnd()); } else break; } if (nodes.length === 1) return nodes[0]; return { type: "OR", children: nodes }; }
-            return parseOr();
+            const total = weights.reduce((a, b) => a + b, 0);
+            if (total === 0) return 0;
+
+            let matchWeight = 0;
+            for (let i = 0; i < values.length; i++) {
+                if (values[i] >= threshold) matchWeight += weights[i];
+            }
+            return matchWeight / total;
         }
 
-        function evalExpr(node, words) {
-            if (!node) return false;
-            if (node.type === "WORD") return words.includes(node.value);
-            if (node.type === "AND") return node.children.every(c => evalExpr(c, words));
-            if (node.type === "OR") return node.children.some(c => evalExpr(c, words));
+        // Parser Logic for Subgroup Triggers
+        // Supports: Word, &, |, (), -, ! (NOT), , (comma = OR)
+        // Strings in double quotes "..." are treated as single words (allows usage of & | ( ) inside names)
+        // Precedence: () > -/! (NOT) > & > |
+        function parseExpr(expr) {
+            // Tokenizer
+            // Added comma to special chars and excluded chars
+            // Added ! to special chars
+            const regex = /"([^"]*)"|([|&()\-,!])|([^|&()\-\s",!]+)/g;
+            const tokens = [];
+            let match;
+            while ((match = regex.exec(expr)) !== null) {
+                if (match[1] !== undefined) {
+                    // Quoted string content: strip quotes
+                    let val = match[1];
+                    if (val.startsWith('"') && val.endsWith('"')) {
+                        val = val.slice(1, -1);
+                    }
+                    tokens.push({ type: 'VAL', value: val });
+                } else if (match[2] !== undefined) {
+                    // Operator / Delimiter
+                    // Normalize comma to OR
+                    let val = match[2];
+                    if (val === ',') val = '|';
+                    tokens.push({ type: 'OP', value: val });
+                } else if (match[3] !== undefined) {
+                    // Normal Word
+                    tokens.push({ type: 'VAL', value: match[3] });
+                }
+            }
+
+            let pos = 0;
+
+            function peek() { return tokens[pos]; }
+            function consume() { return tokens[pos++]; }
+
+            // Expression: Term { '|' Term }
+            function parseExpression() {
+                let left = parseTerm();
+                while (peek() && peek().type === 'OP' && peek().value === '|') {
+                    consume();
+                    const right = parseTerm();
+                    left = { type: 'OR', children: [left, right] };
+                }
+                return left;
+            }
+
+            // Term: Factor { '&' Factor }
+            function parseTerm() {
+                let left = parseFactor();
+                while (peek() && peek().type === 'OP' && peek().value === '&') {
+                    consume();
+                    const right = parseFactor();
+                    left = { type: 'AND', children: [left, right] };
+                }
+                return left;
+            }
+
+            // Factor: -/! Factor | '(' Expression ')' | Word
+            function parseFactor() {
+                const token = peek();
+                if (!token) return null;
+
+                if (token.type === 'OP') {
+                    if (token.value === '-' || token.value === '!') {
+                        consume(); // eat '-' or '!'
+                        const node = parseFactor(); // Recursive for --A etc
+                        return { type: 'NOT', children: [node] };
+                    }
+                    if (token.value === '(') {
+                        consume();
+                        const node = parseExpression();
+                        if (peek() && peek().type === 'OP' && peek().value === ')') {
+                            consume();
+                        } else {
+                            console.warn("Missing closing parenthesis in trigger");
+                        }
+                        return node;
+                    }
+                }
+
+                // Value (Word or Quoted String)
+                if (token.type === 'VAL') {
+                    consume();
+                    return { type: 'WORD', value: token.value };
+                }
+
+                return null;
+            }
+
+            if (tokens.length === 0) return null;
+            return parseExpression();
         }
 
+        // Eval for Boolean Check (during Draw)
+        // Eval for Boolean Check (during Draw)
+        // Returns { match: boolean, used: string[] }
+        function evalExpr(node, chosenWords) {
+            if (!node) return { match: false, used: [] };
+
+            if (node.type === "WORD") {
+                // Reverting to simple includes check as requested (strict match)
+                const match = chosenWords.includes(node.value);
+                return { match: match, used: match ? [node.value] : [] };
+            }
+
+            if (node.type === "NOT") {
+                const res = evalExpr(node.children[0], chosenWords);
+                // P(NOT A) = 1 - P(A)
+                // If child matches, then NOT match is false.
+                // If child does NOT match, then NOT match is true.
+                // In "NOT" case, we don't "consume" words because it relies on absence.
+                return { match: !res.match, used: [] };
+            }
+
+            if (node.type === "AND") {
+                const l = evalExpr(node.children[0], chosenWords);
+                if (!l.match) return { match: false, used: [] };
+
+                const r = evalExpr(node.children[1], chosenWords);
+                if (!r.match) return { match: false, used: [] };
+
+                // Both match
+                return { match: true, used: l.used.concat(r.used) };
+            }
+
+            if (node.type === "OR") {
+                const l = evalExpr(node.children[0], chosenWords);
+                const r = evalExpr(node.children[1], chosenWords);
+
+                if (l.match || r.match) {
+                    // Collect used words from whichever matched (or both)
+                    return { match: true, used: (l.match ? l.used : []).concat(r.match ? r.used : []) };
+                }
+                return { match: false, used: [] };
+            }
+
+            return { match: false, used: [] };
+        }
         function draw() {
+            console.log("========== DRAW START ==========");
             const resultsDiv = document.getElementById("results"); resultsDiv.innerHTML = "";
             const normalGroups = groups.filter(g => g.enabled && !g.isSubgroup);
             const subGroups = groups.filter(g => g.enabled && g.isSubgroup);
             const finalResults = [];
             const chosenWords = [];
             const processed = new Set();
+            const usedWordsSet = new Set();
 
             let currentPathProb = 1.0;
 
-            function processGroup(name, word) {
-                finalResults.push({ name, word });
+            // Helper to add results
+            function addResult(group, word, groupIndex) {
+                finalResults.push({ name: group.name, word: word, groupIndex: groupIndex });
                 chosenWords.push(word);
-                let changed = true;
-                while (changed) {
-                    changed = false;
-                    subGroups.forEach(sg => {
-                        if (processed.has(sg)) return;
-                        if (!sg.triggers) return; // Should not happen if filtered, but safe check
+            }
 
-                        // トリガー判定確率は 0 or 1 (既定)
+            // 1. Execute Normal Groups
+            normalGroups.forEach(g => {
+                const min = (g.min !== undefined) ? g.min : 1;
+                const max = (g.max !== undefined) ? g.max : 1;
+                const peak = (g.peak !== undefined) ? g.peak : min;
+                const sigma = (g.sigma !== undefined) ? g.sigma : 1.0;
+                const skew = g.skew || 0;
+                const kurtosis = g.kurtosis || 0;
+
+                const cRes = pickCountWithProb(min, max, peak, sigma, skew, kurtosis);
+                // Removed noisy 'count picked' log as requested
+
+                // Filter pool based on Word Triggers
+                const pool = [];
+                g.words.forEach(w => {
+                    if (w.useExtra && w.extraText) {
                         try {
-                            const ast = parseExpr(sg.triggers);
-                            if (evalExpr(ast, chosenWords)) {
-                                // Group executes: Multiply by P(Count)
-                                const cRes = pickCountWithProb(sg.min || 0, sg.max || 0);
-                                currentPathProb *= cRes.prob;
-                                const count = cRes.value;
+                            const ast = parseExpr(w.extraText);
+                            const check = evalExpr(ast, chosenWords);
+                            if (check.match) pool.push(w);
+                        } catch (e) {
+                            console.error("Trigger Eval Error for word:", w.text, e);
+                            // On error, treat as NOT matched (safe default)
+                            // pool.push(w); 
+                        }
+                    } else {
+                        pool.push(w);
+                    }
+                });
 
-                                const pool = [...sg.words]; // Copy
+                const effectiveTotal = pool.length;
+                let count = cRes.value;
+                const generatedWords = [];
+
+                if (count >= effectiveTotal) {
+                    const pAll = getProbOfCountAtLeast(min, max, effectiveTotal, peak, sigma, skew, kurtosis);
+                    currentPathProb *= pAll;
+                    count = effectiveTotal;
+                    for (let k = 0; k < count; k++) {
+                        const res = pickWordWithProb(pool);
+                        if (res.word !== null) {
+                            addResult(g, res.word, groups.indexOf(g));
+                            generatedWords.push(res.word);
+                            pool.splice(res.index, 1);
+                        }
+                    }
+                } else {
+                    currentPathProb *= cRes.prob;
+                    for (let k = 0; k < count && pool.length > 0; k++) {
+                        const res = pickWordWithProb(pool);
+                        if (res.word !== null) {
+                            currentPathProb *= res.prob;
+                            addResult(g, res.word, groups.indexOf(g));
+                            generatedWords.push(res.word);
+                            pool.splice(res.index, 1);
+                        }
+                    }
+                }
+
+                // User Request: Dictionary format logs with numbered keys for sorting
+                console.log({
+                    "1. Group": g.name,
+                    "2. Results": generatedWords,
+                    "3. Trigger": "(Normal Group / Always)",
+                    "4. MatchedWords": ["(Unconditional / Enabled)"]
+                });
+            });
+
+            // 2. Iteratively Execute Subgroups
+            let changed = true;
+            while (changed) {
+                changed = false;
+                subGroups.forEach(sg => {
+                    if (processed.has(sg)) return;
+                    // if (!sg.triggers) return; // Old logic: skipped if empty
+
+                    try {
+                        let check = { match: true, used: [] }; // Default match if empty
+                        if (sg.triggers) {
+                            const ast = parseExpr(sg.triggers);
+                            check = evalExpr(ast, chosenWords);
+                        }
+
+                        if (check.match) {
+                            // Trigger matched
+                            const min = (sg.min !== undefined) ? sg.min : 1;
+                            const max = (sg.max !== undefined) ? sg.max : 1;
+                            const peak = (sg.peak !== undefined) ? sg.peak : min;
+                            const sigma = (sg.sigma !== undefined) ? sg.sigma : 1.0;
+                            const skew = sg.skew || 0;
+                            const kurtosis = sg.kurtosis || 0;
+
+                            const cRes = pickCountWithProb(min, max, peak, sigma, skew, kurtosis);
+
+                            // Filter pool based on Word Triggers
+                            const pool = [];
+                            sg.words.forEach(w => {
+                                if (w.useExtra && w.extraText) {
+                                    try {
+                                        const ast = parseExpr(w.extraText);
+                                        const check = evalExpr(ast, chosenWords);
+                                        if (check.match) pool.push(w);
+                                    } catch (e) {
+                                        pool.push(w);
+                                    }
+                                } else {
+                                    pool.push(w);
+                                }
+                            });
+
+                            const effectiveTotal = pool.length;
+                            let count = cRes.value;
+                            const sgIdx = groups.indexOf(sg);
+                            const generatedWords = [];
+
+                            if (count >= effectiveTotal) {
+                                const pAll = getProbOfCountAtLeast(min, max, effectiveTotal, peak, sigma, skew, kurtosis);
+                                currentPathProb *= pAll;
+                                count = effectiveTotal;
+                                for (let k = 0; k < count; k++) {
+                                    const res = pickWordWithProb(pool);
+                                    if (res.word !== null) {
+                                        addResult(sg, res.word, sgIdx);
+                                        generatedWords.push(res.word);
+                                        pool.splice(res.index, 1);
+                                    }
+                                }
+                            } else {
+                                currentPathProb *= cRes.prob;
                                 for (let k = 0; k < count && pool.length > 0; k++) {
                                     const res = pickWordWithProb(pool);
                                     if (res.word !== null) {
                                         currentPathProb *= res.prob;
-                                        finalResults.push({ name: sg.name, word: res.word });
-                                        chosenWords.push(res.word);
+                                        addResult(sg, res.word, sgIdx);
+                                        generatedWords.push(res.word);
                                         pool.splice(res.index, 1);
                                     }
                                 }
-                                processed.add(sg);
-                                changed = true;
-                            } else {
-                                // Group does not execute. P=1.0 given the trigger failure.
                             }
-                        } catch (e) { console.error("Trigger parse error", e); }
-                    });
-                }
+
+                            // User Request: Dictionary format logs with numbered keys
+                            console.log({
+                                "1. Group": sg.name,
+                                "2. Results": generatedWords,
+                                "3. Trigger": sg.triggers,
+                                "4. MatchedWords": check.used && check.used.length > 0 ? check.used : ["(No specific word / NOT condition)"]
+                            });
+
+                            processed.add(sg);
+                            // Mark used words for highlighting (optional feature)
+                            check.used.forEach(w => usedWordsSet.add(w));
+                            changed = true;
+                        }
+                    } catch (e) { console.error("Trigger parse error", e); }
+                });
             }
 
-            normalGroups.forEach(g => {
-                const cRes = pickCountWithProb(g.min || 0, g.max || 0);
-                currentPathProb *= cRes.prob;
-                const count = cRes.value;
-
-                const pool = [...g.words];
-                for (let k = 0; k < count && pool.length > 0; k++) {
-                    const res = pickWordWithProb(pool);
-                    if (res.word !== null) {
-                        currentPathProb *= res.prob;
-                        processGroup(g.name, res.word);
-                        pool.splice(res.index, 1);
-                    }
+            // Sort results: Group Index ASC, then Word ASC
+            finalResults.sort((a, b) => {
+                if (a.groupIndex !== b.groupIndex) {
+                    return a.groupIndex - b.groupIndex;
                 }
+                return a.word.localeCompare(b.word, 'ja');
             });
 
             let lastGroup = null;
             finalResults.forEach(r => {
+                const g = groups[r.groupIndex];
+                // Hide if "Intermediate Material" AND "Used as trigger" (Intermediate consumed)
+                // If it is material but NOT used (Orphan), show it.
+                if (g.isMaterial && usedWordsSet.has(r.word)) return;
+
                 const line = document.createElement("div"); line.className = "result-line";
                 const nameSpan = document.createElement("div"); nameSpan.className = "result-name";
                 nameSpan.textContent = (r.name !== lastGroup) ? r.name : "";
+
+                // 同じグループが続く場合でも、ソートされているので名前は一度だけ表示でOK
+                // ただし、もしグループ名が飛んでいる(ソート順的に)場合は再度表示される
                 lastGroup = r.name;
+
                 line.appendChild(nameSpan);
                 const wordSpan = document.createElement("div"); wordSpan.className = "result-word"; wordSpan.textContent = r.word;
+
+                // Extra Text is now "Word Trigger", so we do NOT display it.
+                /*
+                if (r.extraText) {
+                    const extraDiv = document.createElement("div");
+                    extraDiv.className = "result-extra-text";
+                    extraDiv.textContent = r.extraText;
+                    // Append extra text as a separate block inside wordSpan or line?
+                    // Better to wrap word and extra text in a container?
+                    // Let's modify structure slightly:
+                    // result-line -> [nameSpan, contentDiv]
+                    // contentDiv -> [wordSpan, extraDiv]
+
+                    const contentDiv = document.createElement("div");
+                    contentDiv.style.display = "flex";
+                    contentDiv.style.flexDirection = "column";
+
+                    contentDiv.appendChild(wordSpan);
+                    contentDiv.appendChild(extraDiv);
+
+                    line.appendChild(contentDiv);
+                } else {
+                    line.appendChild(wordSpan);
+                }
+                */
                 line.appendChild(wordSpan);
+
                 resultsDiv.appendChild(line);
             });
 
             if (finalResults.length === 0) {
-                resultsDiv.textContent = "結果なし";
-            } else {
-                // 表示用に整形
-                let probText = "";
-                if (currentPathProb < 0.0001) probText = "<0.01%";
-                else probText = (currentPathProb * 100).toPrecision(3) + "%";
-
-                const footer = document.createElement("div");
-                footer.className = "result-prob-footer";
-                footer.textContent = `この結果が出る確率: 約 ${probText}`;
-                resultsDiv.appendChild(footer);
+                const line = document.createElement("div");
+                line.textContent = "結果なし";
+                line.style.padding = "4px 8px";
+                line.style.color = "#777";
+                resultsDiv.appendChild(line);
             }
+
+            // Always show probability
+            let probText = "";
+            if (currentPathProb < 0.0001) probText = "<0.01%";
+            else probText = (currentPathProb * 100).toPrecision(3) + "%";
+
+            const footer = document.createElement("div");
+            footer.className = "result-prob-footer";
+            footer.textContent = `この結果が出る確率: 約 ${probText}`;
+            resultsDiv.appendChild(footer);
         }
 
         function searchGoogle() {
@@ -743,26 +2140,109 @@
             URL.revokeObjectURL(url);
         }
 
+        function processSettingsContent(jsonStr, fileName) {
+            // Remove comments logic
+            const cleanJson = jsonStr.replace(
+                /("(:?[^\\"]*(\\.)?)*")|(\/\*[\s\S]*?\*\/)|(\/\/.*$)/gm,
+                (match, str, s1, s2, block, line) => {
+                    if (str) return match;
+                    return "";
+                }
+            );
+
+            const data = JSON.parse(cleanJson);
+            if (Array.isArray(data)) {
+                groups = data;
+                // If just array, maybe use filename as name?
+                if (fileName && !document.getElementById("settingsName").value) {
+                    document.getElementById("settingsName").value = fileName.replace(/\.json$/i, "");
+                }
+            } else {
+                groups = data.groups || [];
+                const nameBox = document.getElementById("settingsName");
+                if (nameBox) nameBox.value = data.name || (fileName ? fileName.replace(/\.json$/i, "") : "");
+            }
+            // Migrate old data if needed
+            groups = groups.map(g => migrateGroup(g));
+
+            saveSettings();
+            renderGroups();
+        }
+
+        // Standard File Input Fallback
         function importSettings(event) {
             const file = event.target.files[0];
             if (!file) return;
             const reader = new FileReader();
             reader.onload = e => {
                 try {
-                    const data = JSON.parse(e.target.result);
-                    if (Array.isArray(data)) {
-                        groups = data;
-                    } else {
-                        groups = data.groups || [];
-                        const nameBox = document.getElementById("settingsName");
-                        if (nameBox) nameBox.value = data.name || "";
-                    }
-                    saveSettings();
-                    renderGroups();
+                    processSettingsContent(e.target.result, file.name);
                 }
                 catch (err) { alert("インポートに失敗しました: " + err.message); }
+                event.target.value = "";
             };
             reader.readAsText(file);
+        }
+
+        // File System Access API Implementation
+        async function pickAndLoadSettings() {
+            if (window.showOpenFilePicker) {
+                try {
+                    const [handle] = await window.showOpenFilePicker({
+                        types: [{ description: 'JSON Files', accept: { 'application/json': ['.json'] } }]
+                    });
+                    currentFileHandle = handle;
+                    const file = await handle.getFile();
+                    const text = await file.text();
+                    try {
+                        processSettingsContent(text, file.name);
+                    } catch (e) { alert("Parsing Error: " + e.message); }
+                } catch (e) {
+                    if (e.name !== 'AbortError') {
+                        console.warn("FSA API failed, falling back", e);
+                        document.getElementById('importFile').click();
+                    }
+                }
+            } else {
+                document.getElementById('importFile').click();
+            }
+        }
+
+        async function reImportSettings() {
+            if (currentFileHandle) {
+                try {
+                    // Check permission if needed
+                    // const opts = { mode: 'read' };
+                    // if ((await currentFileHandle.queryPermission(opts)) !== 'granted') {
+                    //    if ((await currentFileHandle.requestPermission(opts)) !== 'granted') throw new Error("Permission denied");
+                    // }
+
+                    const file = await currentFileHandle.getFile();
+                    const text = await file.text();
+                    processSettingsContent(text, file.name);
+                    console.log("Re-imported via Handle");
+
+                    // Flash the button or show toast?
+                    const btn = document.querySelector("button[onclick='reImportSettings()']");
+                    if (btn) {
+                        const original = btn.textContent;
+                        btn.textContent = "✔ 完了";
+                        setTimeout(() => btn.textContent = original, 1000);
+                    }
+                } catch (e) {
+                    console.error("Re-import handle failed:", e);
+                    // Retry full pick
+                    pickAndLoadSettings();
+                }
+            } else {
+                // If no handle yet, treat as normal import
+                // Try FSA first
+                if (window.showOpenFilePicker) {
+                    pickAndLoadSettings();
+                } else {
+                    document.getElementById('importFile').click();
+                }
+            }
         }
 
         loadSettings(); renderGroups();
