@@ -130,7 +130,10 @@
 
         .word-line input[type="number"] {
             width: 4em;
-            height: 28px;
+            height: 26px;
+            /* Reverted to compact size */
+            padding: 1px;
+            /* Reverted padding */
             box-sizing: border-box;
         }
 
@@ -139,9 +142,11 @@
             font-size: 0.9em;
             color: #666;
             width: auto;
-            /* 幅固定を解除 */
-            text-align: right;
+            text-align: left;
+            /* Changed from right */
             display: inline-block;
+            white-space: nowrap;
+            /* Prevent stacking */
         }
 
         .prob-total {
@@ -189,7 +194,10 @@
         }
 
         .word-line input[type="text"] {
-            height: 28px;
+            height: 32px;
+            /* Increased from 28px */
+            padding: 4px;
+            /* Added padding */
             box-sizing: border-box;
         }
 
@@ -197,7 +205,8 @@
             /* width: 50px; 固定幅を廃止 */
             min-width: 30px;
             padding: 0 4px;
-            height: 28px;
+            height: 32px;
+            /* Match input height */
         }
 
         .bottom {
@@ -232,6 +241,28 @@
             /* 薄い水色 */
             border-radius: 6px;
             color: #31708f;
+            transition: color 0.1s;
+            /* Smooth transition for flash */
+        }
+
+        .result-flash {
+            color: transparent !important;
+        }
+
+        input[type="text"],
+        input[type="password"] {
+            height: 32px;
+            padding: 4px;
+            box-sizing: border-box;
+            vertical-align: middle;
+        }
+
+        /* Reverted numeric inputs to compact */
+        input[type="number"] {
+            height: 26px;
+            padding: 1px;
+            box-sizing: border-box;
+            vertical-align: middle;
         }
 
         input[type="text"] {
@@ -289,6 +320,8 @@
 <body>
     <div id="main">
         <button id="drawBtn" onclick="draw()" title="設定に基づいて抽選を行います">抽選</button>
+        <button id="prevResultBtn" onclick="navigateHistory(-1)" disabled title="前の抽選結果を表示します">前の結果</button>
+        <button id="nextResultBtn" onclick="navigateHistory(1)" disabled title="次の抽選結果を表示します">次の結果</button>
         <button onclick="searchGoogle()" title="抽選結果の単語をGoogleでまとめて検索します">Googleで検索</button>
         <div id="results">抽選ボタンでくじを引く</div>
 
@@ -311,6 +344,10 @@
         let recalculateTimer = null;
         let globalWordProbs = {};
         let currentFileHandle = null; // for File System Access API
+
+        // History Logic
+        let resultHistory = [];
+        let currentHistoryIndex = -1;
 
         function saveSettings() {
             const name = document.getElementById("settingsName").value;
@@ -490,9 +527,9 @@
                 const max = g.max !== undefined ? g.max : 1;
                 countControl.innerHTML = `
                     <span>抽選数:</span>
-                    <input type="number" class="min-max-input" min="0" value="${min}" onchange="updateGroupCount(${i}, 'min', this.value)" style="width:50px;"> 
+                    <input type="number" class="min-max-input" min="0" value="${min}" onchange="updateGroupCount(${i}, 'min', this.value)" style="width:50px; text-align:right;"> 
                     <span>～</span>
-                    <input type="number" class="min-max-input" min="0" value="${max}" onchange="updateGroupCount(${i}, 'max', this.value)" style="width:50px;">
+                    <input type="number" class="min-max-input" min="0" value="${max}" onchange="updateGroupCount(${i}, 'max', this.value)" style="width:50px; text-align:right;">
                 `;
                 topRow.appendChild(countControl);
 
@@ -592,6 +629,7 @@
                 const header = document.createElement("div");
                 header.style.display = "flex";
                 header.style.marginBottom = "4px";
+                header.style.marginTop = "8px"; // Request: Small margin top
                 header.style.fontSize = "0.9em";
                 header.style.color = "#555";
 
@@ -729,6 +767,7 @@
                         const extraInput = document.createElement("textarea");
                         extraInput.className = "trigger-area";
                         extraInput.style.flexGrow = "1";
+                        extraInput.style.marginRight = "10%"; // Request: Cut 10% from right
                         extraInput.style.fontSize = "0.9em";
                         extraInput.placeholder = "出現条件 (例: 単語A & 単語B)\n空欄の場合は常に有効";
                         extraInput.value = w.extraText || "";
@@ -2110,6 +2149,58 @@
             footer.className = "result-prob-footer";
             footer.textContent = `この結果が出る確率: 約 ${probText}`;
             resultsDiv.appendChild(footer);
+
+            // Save to History
+            saveResultToHistory(resultsDiv.innerHTML);
+        }
+
+        // --- History Navigation Helpers ---
+        function triggerFlash() {
+            const r = document.getElementById("results");
+            r.classList.add("result-flash");
+            setTimeout(() => {
+                r.classList.remove("result-flash");
+            }, 100);
+        }
+
+        function saveResultToHistory(html) {
+            // Request: Always append new result to the end, preserving existing history
+            // if (currentHistoryIndex < resultHistory.length - 1) {
+            //    resultHistory = resultHistory.slice(0, currentHistoryIndex + 1);
+            // }
+            resultHistory.push(html);
+            currentHistoryIndex = resultHistory.length - 1;
+            updateHistoryButtons();
+
+            // Flash effect on update
+            triggerFlash();
+        }
+
+        function navigateHistory(delta) {
+            const newIndex = currentHistoryIndex + delta;
+            if (newIndex >= 0 && newIndex < resultHistory.length) {
+                currentHistoryIndex = newIndex;
+                document.getElementById("results").innerHTML = resultHistory[currentHistoryIndex];
+                updateHistoryButtons();
+
+                // Flash effect on nav
+                triggerFlash();
+            }
+        }
+
+        function updateHistoryButtons() {
+            const prevBtn = document.getElementById("prevResultBtn");
+            const nextBtn = document.getElementById("nextResultBtn");
+            if (!prevBtn || !nextBtn) return;
+
+            prevBtn.disabled = (currentHistoryIndex <= 0);
+            nextBtn.disabled = (currentHistoryIndex >= resultHistory.length - 1);
+
+            // Visual feedback (Gray out) is handled by disabled attribute and CSS
+            prevBtn.style.opacity = prevBtn.disabled ? "0.5" : "1";
+            prevBtn.style.cursor = prevBtn.disabled ? "not-allowed" : "pointer";
+            nextBtn.style.opacity = nextBtn.disabled ? "0.5" : "1";
+            nextBtn.style.cursor = nextBtn.disabled ? "not-allowed" : "pointer";
         }
 
         function searchGoogle() {
