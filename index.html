@@ -712,6 +712,7 @@
                     rightInput.style.flexGrow = "1";
 
                     rightInput.onchange = () => { groups[i].words[j].text = rightInput.value; saveSettings(); triggerRecalculate(); };
+                    rightInput.onpaste = (e) => handleWordPaste(e, i, j, rightInput);
 
                     const extraCheck = document.createElement("input");
                     extraCheck.type = "checkbox";
@@ -2334,6 +2335,53 @@
                     document.getElementById('importFile').click();
                 }
             }
+        }
+
+        function handleWordPaste(e, groupIndex, wordIndex, inputElement) {
+            const pasteText = (e.clipboardData || window.clipboardData).getData('text');
+            if (!pasteText) return;
+
+            // Split by newline or comma
+            const tokens = pasteText.split(/[\r\n,]+/).filter(t => t.trim() !== "");
+            if (tokens.length <= 1) return; // Allow default paste for single lines
+
+            e.preventDefault();
+
+            // 1. Process first token (Merge with existing content)
+            const firstToken = tokens[0];
+            const start = inputElement.selectionStart;
+            const end = inputElement.selectionEnd;
+            const originalValue = inputElement.value;
+            const prefix = originalValue.slice(0, start);
+            const suffix = originalValue.slice(end);
+            const newValue = prefix + firstToken + suffix;
+
+            // Update data model for current word
+            groups[groupIndex].words[wordIndex].text = newValue;
+            inputElement.value = newValue;
+
+            // 2. Insert subsequent tokens
+            const newWords = [];
+            for (let k = 1; k < tokens.length; k++) {
+                newWords.push({
+                    text: tokens[k],
+                    weight: 1, // Default weight 1
+                    useExtra: false
+                });
+            }
+            // Insert after current word
+            groups[groupIndex].words.splice(wordIndex + 1, 0, ...newWords);
+
+            saveSettings();
+            renderGroups();
+            triggerRecalculate();
+
+            // Set cursor to end of first inserted token? 
+            // Since we re-render, focus is lost. 
+            // Ideally we could restore focus to the last added input or the first one, 
+            // but for bulk add, just refreshing is usually acceptable.
+            // If user wants to continue typing in first input, we could try to restore selection:
+            // But DOM is replaced. Ignoring focus restore for now as per minimal viable.
         }
 
         loadSettings(); renderGroups();
