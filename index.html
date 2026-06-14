@@ -1865,9 +1865,10 @@
             if (!node) return { match: false, used: [] };
 
             if (node.type === "WORD") {
-                // Reverting to simple includes check as requested (strict match)
-                const match = chosenWords.includes(node.value);
-                return { match: match, used: match ? [node.value] : [] };
+                // Trimmed match: chosenWords are stored trimmed, so compare trimmed too.
+                const v = (node.value || "").trim();
+                const match = chosenWords.includes(v);
+                return { match: match, used: match ? [v] : [] };
             }
 
             if (node.type === "NOT") {
@@ -1906,11 +1907,9 @@
         function draw() {
             console.log("========== DRAW START ==========");
             const resultsDiv = document.getElementById("results"); resultsDiv.innerHTML = "";
-            const normalGroups = groups.filter(g => g.enabled && !g.isSubgroup);
-            const subGroups = groups.filter(g => g.enabled && g.isSubgroup);
+            const execGroups = groups.filter(g => g.enabled);
             const finalResults = [];
             const chosenWords = [];
-            const processed = new Set();
             const usedWordsSet = new Set();
 
             let currentPathProb = 1.0;
@@ -1918,11 +1917,20 @@
             // Helper to add results
             function addResult(group, word, groupIndex) {
                 finalResults.push({ name: group.name, word: word, groupIndex: groupIndex });
-                chosenWords.push(word);
+                chosenWords.push(String(word).trim());
             }
 
-            // 1. Execute Normal Groups
-            normalGroups.forEach(g => {
+            // Execute one group: gate by group trigger (subgroups), then filter pool by word triggers.
+            function runGroup(g) {
+                let check = { match: true, used: [] };
+                if (g.isSubgroup && g.triggers) {
+                    try { check = evalExpr(parseExpr(g.triggers), chosenWords); }
+                    catch (e) { check = { match: false, used: [] }; }
+                }
+                if (!check.match) {
+                    console.log({ "1. Group": g.name, "2. Results": [], "3. Trigger": g.triggers || "(none)", "4. MatchedWords": ["(Trigger NOT met -> skipped)"] });
+                    return;
+                }
                 const min = (g.min !== undefined) ? g.min : 1;
                 const max = (g.max !== undefined) ? g.max : 1;
                 const peak = (g.peak !== undefined) ? g.peak : min;
@@ -1980,102 +1988,68 @@
                     }
                 }
 
-                // User Request: Dictionary format logs with numbered keys for sorting
+                // Mark trigger words as "used" (for 中間素材 hiding)
+                if (check.used) check.used.forEach(w => usedWordsSet.add(w));
+
                 console.log({
                     "1. Group": g.name,
                     "2. Results": generatedWords,
-                    "3. Trigger": "(Normal Group / Always)",
-                    "4. MatchedWords": ["(Unconditional / Enabled)"]
+                    "3. Trigger": (g.isSubgroup && g.triggers) ? g.triggers : "(Normal Group / Always)",
+                    "4. MatchedWords": (check.used && check.used.length > 0) ? check.used : ["(Unconditional / No specific word)"]
                 });
-            });
+            }
 
-            // 2. Iteratively Execute Subgroups
-            let changed = true;
-            while (changed) {
-                changed = false;
-                subGroups.forEach(sg => {
-                    if (processed.has(sg)) return;
-                    // if (!sg.triggers) return; // Old logic: skipped if empty
-
-                    try {
-                        let check = { match: true, used: [] }; // Default match if empty
-                        if (sg.triggers) {
-                            const ast = parseExpr(sg.triggers);
-                            check = evalExpr(ast, chosenWords);
-                        }
-
-                        if (check.match) {
-                            // Trigger matched
-                            const min = (sg.min !== undefined) ? sg.min : 1;
-                            const max = (sg.max !== undefined) ? sg.max : 1;
-                            const peak = (sg.peak !== undefined) ? sg.peak : min;
-                            const sigma = (sg.sigma !== undefined) ? sg.sigma : 1.0;
-                            const skew = sg.skew || 0;
-                            const kurtosis = sg.kurtosis || 0;
-
-                            const cRes = pickCountWithProb(min, max, peak, sigma, skew, kurtosis);
-
-                            // Filter pool based on Word Triggers
-                            const pool = [];
-                            sg.words.forEach(w => {
-                                if (w.useExtra && w.extraText) {
-                                    try {
-                                        const ast = parseExpr(w.extraText);
-                                        const check = evalExpr(ast, chosenWords);
-                                        if (check.match) pool.push(w);
-                                    } catch (e) {
-                                        pool.push(w);
-                                    }
-                                } else {
-                                    pool.push(w);
-                                }
-                            });
-
-                            const effectiveTotal = pool.length;
-                            let count = cRes.value;
-                            const sgIdx = groups.indexOf(sg);
-                            const generatedWords = [];
-
-                            if (count >= effectiveTotal) {
-                                const pAll = getProbOfCountAtLeast(min, max, effectiveTotal, peak, sigma, skew, kurtosis);
-                                currentPathProb *= pAll;
-                                count = effectiveTotal;
-                                for (let k = 0; k < count; k++) {
-                                    const res = pickWordWithProb(pool);
-                                    if (res.word !== null) {
-                                        addResult(sg, res.word, sgIdx);
-                                        generatedWords.push(res.word);
-                                        pool.splice(res.index, 1);
-                                    }
-                                }
-                            } else {
-                                currentPathProb *= cRes.prob;
-                                for (let k = 0; k < count && pool.length > 0; k++) {
-                                    const res = pickWordWithProb(pool);
-                                    if (res.word !== null) {
-                                        currentPathProb *= res.prob;
-                                        addResult(sg, res.word, sgIdx);
-                                        generatedWords.push(res.word);
-                                        pool.splice(res.index, 1);
-                                    }
-                                }
-                            }
-
-                            // User Request: Dictionary format logs with numbered keys
-                            console.log({
-                                "1. Group": sg.name,
-                                "2. Results": generatedWords,
-                                "3. Trigger": sg.triggers,
-                                "4. MatchedWords": check.used && check.used.length > 0 ? check.used : ["(No specific word / NOT condition)"]
-                            });
-
-                            processed.add(sg);
-                            // Mark used words for highlighting (optional feature)
-                            check.used.forEach(w => usedWordsSet.add(w));
-                            changed = true;
-                        }
-                    } catch (e) { console.error("Trigger parse error", e); }
+            // Execute groups respecting list order AND word/group-trigger data dependencies.
+            // A group runs only once every word it references (group trigger + word triggers)
+            // that is still producible by another unprocessed group has been produced.
+            // This makes triggers fire regardless of list position or normal/conditional type,
+            // without waiting on the group's own words (no intra-group promotion).
+            function collectVars(expr) {
+                const out = [];
+                try {
+                    (function walk(n) {
+                        if (!n) return;
+                        if (n.type === "WORD") out.push((n.value || "").trim());
+                        if (n.children) n.children.forEach(walk);
+                    })(parseExpr(expr));
+                } catch (e) { /* ignore parse errors */ }
+                return out;
+            }
+            function refsOf(g) {
+                const vars = [];
+                if (g.isSubgroup && g.triggers) vars.push(...collectVars(g.triggers));
+                g.words.forEach(w => { if (w.useExtra && w.extraText) vars.push(...collectVars(w.extraText)); });
+                return vars;
+            }
+            const processedG = new Set();
+            function isReady(g) {
+                const refs = refsOf(g);
+                if (refs.length === 0) return true;
+                // Words still producible by OTHER unprocessed groups
+                const pending = new Set();
+                execGroups.forEach(other => {
+                    if (other === g || processedG.has(other)) return;
+                    other.words.forEach(w => { if (w.text) pending.add(w.text.trim()); });
                 });
+                return refs.every(v => !pending.has(v));
+            }
+
+            let safety = execGroups.length + 1;
+            while (processedG.size < execGroups.length && safety-- > 0) {
+                let progressed = false;
+                for (const g of execGroups) {
+                    if (processedG.has(g) || !isReady(g)) continue;
+                    runGroup(g);
+                    processedG.add(g);
+                    progressed = true;
+                }
+                if (!progressed) {
+                    // Unresolvable (e.g. cyclic) dependency: run the rest in list order to terminate.
+                    for (const g of execGroups) {
+                        if (!processedG.has(g)) { runGroup(g); processedG.add(g); }
+                    }
+                    break;
+                }
             }
 
             // Sort results: Group Index ASC, then Word ASC
