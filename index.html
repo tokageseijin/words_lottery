@@ -708,11 +708,19 @@
 
                     const rightInput = document.createElement("input");
                     rightInput.type = "text";
+                    rightInput.id = `word-text-${i}-${j}`;
                     rightInput.value = w.text;
                     rightInput.style.flexGrow = "1";
 
                     rightInput.onchange = () => { groups[i].words[j].text = rightInput.value; saveSettings(); triggerRecalculate(); };
                     rightInput.onpaste = (e) => handleWordPaste(e, i, j, rightInput);
+                    rightInput.addEventListener("keydown", (e) => {
+                        if (e.key !== "Enter") return;
+                        // IME変換確定のEnterは無視し、確定後のEnterのみで新規追加
+                        if (e.isComposing || e.keyCode === 229) return;
+                        e.preventDefault();
+                        addWordAfter(i, j);
+                    });
 
                     const extraCheck = document.createElement("input");
                     extraCheck.type = "checkbox";
@@ -725,13 +733,59 @@
                         renderGroups();
                     };
 
-                    const upBtn = document.createElement("button"); upBtn.textContent = "↑"; upBtn.title = "単語を上に移動"; upBtn.onclick = () => moveWord(i, j, -1);
-                    const downBtn = document.createElement("button"); downBtn.textContent = "↓"; downBtn.title = "単語を下に移動"; downBtn.onclick = () => moveWord(i, j, 1);
+                    const dragHandle = document.createElement("span");
+                    dragHandle.className = "drag-handle";
+                    dragHandle.textContent = "⠿";
+                    dragHandle.title = "ドラッグして並べ替え";
+                    dragHandle.style.cursor = "grab";
+                    dragHandle.style.color = "#bbb";
+                    dragHandle.style.padding = "0 6px";
+                    dragHandle.style.fontSize = "1.1em";
+                    dragHandle.style.userSelect = "none";
 
                     rightSection.appendChild(rightInput);
                     rightSection.appendChild(extraCheck);
-                    rightSection.appendChild(upBtn);
-                    rightSection.appendChild(downBtn);
+                    rightSection.appendChild(dragHandle);
+
+                    // --- Drag & drop reordering (within the same group) ---
+                    wordContainer.addEventListener("mousedown", (e) => {
+                        // Only allow dragging when grabbing the handle, so inputs stay usable
+                        wordContainer.draggable = (e.target === dragHandle);
+                    });
+                    const clearDropIndicator = () => {
+                        wordContainer.style.borderTop = "";
+                        wordContainer.style.borderBottom = "1px solid #f0f0f0";
+                    };
+                    wordContainer.addEventListener("dragstart", (e) => {
+                        wordDragSrc = { i, j };
+                        e.dataTransfer.effectAllowed = "move";
+                        e.dataTransfer.setData("text/plain", String(j));
+                        wordContainer.style.opacity = "0.4";
+                    });
+                    wordContainer.addEventListener("dragend", () => {
+                        wordContainer.draggable = false;
+                        wordContainer.style.opacity = "";
+                        clearDropIndicator();
+                    });
+                    wordContainer.addEventListener("dragover", (e) => {
+                        if (!wordDragSrc || wordDragSrc.i !== i) return; // same group only
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = "move";
+                        const rect = wordContainer.getBoundingClientRect();
+                        const before = (e.clientY - rect.top) < rect.height / 2;
+                        wordContainer.style.borderTop = before ? "2px solid #4a90d9" : "";
+                        wordContainer.style.borderBottom = before ? "1px solid #f0f0f0" : "2px solid #4a90d9";
+                    });
+                    wordContainer.addEventListener("dragleave", clearDropIndicator);
+                    wordContainer.addEventListener("drop", (e) => {
+                        e.preventDefault();
+                        clearDropIndicator();
+                        if (!wordDragSrc || wordDragSrc.i !== i) return;
+                        const rect = wordContainer.getBoundingClientRect();
+                        const before = (e.clientY - rect.top) < rect.height / 2;
+                        reorderWord(wordDragSrc.i, wordDragSrc.j, before ? j : j + 1);
+                        wordDragSrc = null;
+                    });
 
                     if (j > 0) {
                         const delBtn = document.createElement("button");
@@ -1677,11 +1731,26 @@
         function deleteGroup(i) { groups.splice(i, 1); saveSettings(); renderGroups(); }
         function moveGroup(i, dir) { const ni = i + dir; if (ni < 0 || ni >= groups.length) return; const tmp = groups[i]; groups[i] = groups[ni]; groups[ni] = tmp; saveSettings(); renderGroups(); }
         function deleteWord(i, j) { groups[i].words.splice(j, 1); saveSettings(); renderGroups(); }
-        function moveWord(i, j, dir) {
+        function addWordAfter(i, j) {
+            // 現在の入力値を確定保存してから次の単語を挿入
+            const input = document.getElementById(`word-text-${i}-${j}`);
+            if (input) groups[i].words[j].text = input.value;
+            groups[i].words.splice(j + 1, 0, { text: "", weight: 1 });
+            saveSettings();
+            renderGroups();
+            // 追加した単語の入力欄へフォーカスを移して連続入力できるようにする
+            const next = document.getElementById(`word-text-${i}-${j + 1}`);
+            if (next) next.focus();
+        }
+        let wordDragSrc = null;
+        function reorderWord(i, from, to) {
             const words = groups[i].words;
-            const newIndex = j + dir;
-            if (newIndex < 0 || newIndex >= words.length) return;
-            [words[j], words[newIndex]] = [words[newIndex], words[j]];
+            if (from < 0 || from >= words.length) return;
+            const [moved] = words.splice(from, 1);
+            // Removing the item shifts later indices down by one
+            if (from < to) to -= 1;
+            to = Math.max(0, Math.min(to, words.length));
+            words.splice(to, 0, moved);
             saveSettings();
             renderGroups();
         }
